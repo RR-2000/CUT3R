@@ -114,6 +114,7 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         rgb_head=False,
         pose_conf_head=False,
         pose_head=False,
+        dymask_head=False,
         **croco_kwargs,
     ):
         super().__init__()
@@ -135,6 +136,7 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         self.pose_conf_head = pose_conf_head
         self.pose_head = pose_head
         self.croco_kwargs = croco_kwargs
+        self.dymask_head = dymask_head
 
 
 class LocalMemory(nn.Module):
@@ -467,6 +469,20 @@ class ARCroco3DStereo(CroCoNet):
                 self.dec_blocks_state,
                 self.pose_retriever,
                 self.pose_token,
+            ],
+            "encoder_and_3d_predictor": [
+                self.patch_embed,
+                self.patch_embed_ray_map,
+                self.masked_img_token,
+                self.masked_ray_map_token,
+                self.enc_blocks,
+                self.enc_blocks_ray_map,
+                self.enc_norm,
+                self.enc_norm_ray_map,
+                self.dec_blocks,
+                self.dec_norm,
+                self.decoder_embed,
+                self.downstream_head
             ],
         }
         freeze_all_params(to_be_frozen[freeze])
