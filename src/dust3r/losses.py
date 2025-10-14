@@ -76,8 +76,13 @@ class MSELoss(LLoss):
     def distance(self, a, b):
         return (a - b) ** 2
 
-
 MSE = MSELoss()
+
+class BCELoss(LLoss):
+    def distance(self, a, b):
+        return torch.nn.functional.binary_cross_entropy_with_logits(a, b)
+
+BCE = BCELoss()
 
 
 class Criterion(nn.Module):
@@ -1182,3 +1187,26 @@ class Regr3DPose_ScaleInv(Regr3DPose):
             pose_masks,
             monitoring,
         )
+
+
+class MMaskLoss(Criterion, MultiLoss):
+    def __init__(self, criterion):
+        super().__init__(criterion)
+
+    def img_loss(self, a, b):
+        return self.criterion(a, b)
+
+    def compute_loss(self, gts, preds, **kw):
+        gt_dymasks = [gt["dynamic_mask"].unsqueeze(-1) for gt in gts]
+        pred_dymasks = [pred["dynamic_mask"] for pred in preds]
+        ls = [
+            self.img_loss(pred_dymask, gt_dymask)
+            for pred_dymask, gt_dymask in zip(pred_dymasks, gt_dymasks)
+        ]
+        details = {}
+        self_name = type(self).__name__
+        for i, l in enumerate(ls):
+            details[self_name + f"_dymask/{i+1}"] = float(l)
+            details[f"pred_dymask_{i+1}"] = pred_dymasks[i]
+        dymask_loss = sum(ls) / len(ls)
+        return dymask_loss, details
