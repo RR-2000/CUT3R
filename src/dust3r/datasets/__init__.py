@@ -33,6 +33,7 @@ from .unreal4k import UnReal4K_Multi
 from .vkitti2 import VirtualKITTI2_Multi  # noqa
 from .waymo import Waymo_Multi  # noqa
 from .wildrgbd import WildRGBD_Multi  # noqa
+from .pointodyssey_multiview import PointOdyssey_Multiview
 
 
 from accelerate import Accelerator
