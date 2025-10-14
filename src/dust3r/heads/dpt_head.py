@@ -15,6 +15,7 @@ from dust3r.heads.postprocess import (
     postprocess_pose_conf,
     postprocess_pose,
     reg_dense_conf,
+    postprocess_dymask,
 )
 import dust3r.utils.path_to_croco  # noqa: F401
 from models.dpt_block import DPTOutputAdapter  # noqa
@@ -244,6 +245,160 @@ class DPTPts3dPose(nn.Module):
                 )
                 rgb_output = postprocess_rgb(rgb_out)
                 final_output.update(rgb_output)
+
+            if self.has_pose:
+                pose = postprocess_pose(pose, self.pose_mode)
+                final_output["camera_pose"] = pose  # B,7
+                cross_out = checkpoint(
+                    self.dpt_cross,
+                    x_cross,
+                    image_size=(img_info[0], img_info[1]),
+                    use_reentrant=False,
+                )
+                tmp = postprocess(cross_out, self.depth_mode, self.conf_mode)
+                final_output["pts3d_in_other_view"] = tmp.pop("pts3d")
+                final_output["conf"] = tmp.pop("conf")
+        return final_output
+
+
+
+class DPTPts3dPoseDyMask(nn.Module):
+    def __init__(self, net, has_conf=False, has_rgb=False, has_pose=False, has_dymask=True):
+        super(DPTPts3dPoseDyMask, self).__init__()
+        self.return_all_layers = True  # backbone needs to return all layers
+        self.depth_mode = net.depth_mode
+        self.conf_mode = net.conf_mode
+        self.pose_mode = net.pose_mode
+
+        self.has_conf = has_conf
+        self.has_rgb = has_rgb
+        self.has_pose = has_pose
+        self.has_dymask = has_dymask
+
+        pts_channels = 3 + has_conf
+        rgb_channels = has_rgb * 3
+        dymask_channels = has_dymask * 1
+        feature_dim = 256
+        last_dim = feature_dim // 2
+        ed = net.enc_embed_dim
+        dd = net.dec_embed_dim
+        hooks_idx = [0, 1, 2, 3]
+        dim_tokens = [ed, dd, dd, dd]
+        head_type = "regression"
+        output_width_ratio = 1
+
+        pts_dpt_args = dict(
+            output_width_ratio=output_width_ratio,
+            num_channels=pts_channels,
+            feature_dim=feature_dim,
+            last_dim=last_dim,
+            dim_tokens=dim_tokens,
+            hooks_idx=hooks_idx,
+            head_type=head_type,
+        )
+        rgb_dpt_args = dict(
+            output_width_ratio=output_width_ratio,
+            num_channels=rgb_channels,
+            feature_dim=feature_dim,
+            last_dim=last_dim,
+            dim_tokens=dim_tokens,
+            hooks_idx=hooks_idx,
+            head_type=head_type,
+        )
+
+        dymask_dpt_args = dict(
+            output_width_ratio=output_width_ratio,
+            num_channels=dymask_channels,
+            feature_dim=feature_dim,
+            last_dim=last_dim,
+            dim_tokens=dim_tokens,
+            hooks_idx=hooks_idx,
+            head_type=head_type,
+        )
+        if hooks_idx is not None:
+            pts_dpt_args.update(hooks=hooks_idx)
+            rgb_dpt_args.update(hooks=hooks_idx)
+            dymask_dpt_args.update(hooks=hooks_idx)
+
+        self.dpt_self = DPTOutputAdapter_fix(**pts_dpt_args)
+        dpt_init_args = {} if dim_tokens is None else {"dim_tokens_enc": dim_tokens}
+        self.dpt_self.init(**dpt_init_args)
+
+        self.final_transform = nn.ModuleList(
+            [
+                ConditionModulationBlock(
+                    net.dec_embed_dim,
+                    net.dec_num_heads,
+                    mlp_ratio=4.0,
+                    qkv_bias=True,
+                    rope=net.rope,
+                )
+                for _ in range(2)
+            ]
+        )
+
+        self.dpt_cross = DPTOutputAdapter_fix(**pts_dpt_args)
+        dpt_init_args = {} if dim_tokens is None else {"dim_tokens_enc": dim_tokens}
+        self.dpt_cross.init(**dpt_init_args)
+
+        if has_rgb:
+            self.dpt_rgb = DPTOutputAdapter_fix(**rgb_dpt_args)
+            dpt_init_args = {} if dim_tokens is None else {"dim_tokens_enc": dim_tokens}
+            self.dpt_rgb.init(**dpt_init_args)
+
+        if has_dymask:
+            self.dpt_dymask = DPTOutputAdapter_fix(**dymask_dpt_args)
+            dpt_init_args = {} if dim_tokens is None else {"dim_tokens_enc": dim_tokens}
+            self.dpt_dymask.init(**dpt_init_args)
+
+        if has_pose:
+            in_dim = net.dec_embed_dim
+            self.pose_head = PoseDecoder(hidden_size=in_dim)
+
+    def forward(self, x, img_info, **kwargs):
+        if self.has_pose:
+            pose_token = x[-1][:, 0].clone()
+            token = x[-1][:, 1:]
+            with torch.cuda.amp.autocast(enabled=False):
+                pose = self.pose_head(pose_token)
+
+            token_cross = token.clone()
+            for blk in self.final_transform:
+                token_cross = blk(token_cross, pose_token, kwargs.get("pos"))
+            x = x[:-1] + [token]
+            x_cross = x[:-1] + [token_cross]
+
+        with torch.cuda.amp.autocast(enabled=False):
+            self_out = checkpoint(
+                self.dpt_self,
+                x,
+                image_size=(img_info[0], img_info[1]),
+                use_reentrant=False,
+            )
+
+            final_output = postprocess(self_out, self.depth_mode, self.conf_mode)
+            final_output["pts3d_in_self_view"] = final_output.pop("pts3d")
+            final_output["conf_self"] = final_output.pop("conf")
+
+            if self.has_rgb:
+                rgb_out = checkpoint(
+                    self.dpt_rgb,
+                    x,
+                    image_size=(img_info[0], img_info[1]),
+                    use_reentrant=False,
+                )
+                rgb_output = postprocess_rgb(rgb_out)
+                final_output.update(rgb_output)
+            
+            if self.has_dymask:
+                dymask_out = checkpoint(
+                    self.dpt_dymask,
+                    x,
+                    image_size=(img_info[0], img_info[1]),
+                    use_reentrant=False,
+                )
+                dymask_output = postprocess_dymask(dymask_out)
+                final_output.update(dymask_output)
 
             if self.has_pose:
                 pose = postprocess_pose(pose, self.pose_mode)

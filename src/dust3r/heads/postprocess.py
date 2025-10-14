@@ -67,6 +67,10 @@ def postprocess_pose_conf(out):
     fmap = out.permute(0, 2, 3, 1)  # B,H,W,1
     return dict(pose_conf=torch.sigmoid(fmap))
 
+def postprocess_dymask(out):
+    fmap = out.permute(0, 2, 3, 1)  # B,H,W,1
+    return dict(dynamic_mask=torch.sigmoid(fmap))
+
 
 def postprocess_desc(out, depth_mode, conf_mode, desc_dim, double_channel=False):
     """
