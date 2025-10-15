@@ -223,6 +223,8 @@ def train(args):
     optimizer, model, data_loader_train = accelerator.prepare(
         optimizer, model, data_loader_train
     )
+    for key,value in data_loader_test.items():
+        data_loader_test[key] = accelerator.prepare(value)
 
     def write_log_stats(epoch, train_stats, test_stats):
         if accelerator.is_main_process:
@@ -605,7 +607,7 @@ def test_one_epoch(
         for tag, attr in aggs
     }
 
-    if log_writer is not None:
+    if log_writer is not None and False:
         for name, val in results.items():
             if isinstance(val, torch.Tensor):
                 if val.ndim > 0:
