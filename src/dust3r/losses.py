@@ -80,7 +80,7 @@ MSE = MSELoss()
 
 class BCELoss(LLoss):
     def distance(self, a, b):
-        return torch.nn.functional.binary_cross_entropy_with_logits(a, b)
+        return torch.nn.functional.binary_cross_entropy(a, b)
 
 BCE = BCELoss()
 
