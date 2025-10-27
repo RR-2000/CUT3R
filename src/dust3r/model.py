@@ -480,9 +480,19 @@ class ARCroco3DStereo(CroCoNet):
                 self.enc_norm,
                 self.enc_norm_ray_map,
                 self.dec_blocks,
-                self.dec_norm,
+                self.dec_blocks_state,
+                self.pose_retriever,
+                self.pose_token,
+                self.register_tokens,
+                self.decoder_embed_state,
                 self.decoder_embed,
-                self.downstream_head
+                self.dec_norm,
+                self.dec_norm_state,
+                self.downstream_head.dpt_self,
+                self.downstream_head.final_transform,
+                self.downstream_head.dpt_cross,
+                self.downstream_head.dpt_rgb,
+                self.downstream_head.pose_head,
             ],
         }
         freeze_all_params(to_be_frozen[freeze])
