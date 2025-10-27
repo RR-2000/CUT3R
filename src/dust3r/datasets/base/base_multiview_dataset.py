@@ -337,7 +337,7 @@ class BaseMultiViewDataset(EasyDataset):
             ar_idx = 0
             nview = self.num_views
 
-        assert nview >= 1 and nview <= self.num_views
+        assert self.num_views == -1 or (nview >= 1 and nview <= self.num_views)
         # set-up the rng
         if self.seed:  # reseed for each __getitem__
             self._rng = np.random.default_rng(seed=self.seed + idx)
@@ -353,7 +353,7 @@ class BaseMultiViewDataset(EasyDataset):
             ar_idx
         ]  # DO NOT CHANGE THIS (compatible with BatchedRandomSampler)
         views = self._get_views(idx, resolution, self._rng, nview)
-        assert len(views) == nview
+        assert len(views) == nview or self.num_views == -1
 
         if "camera_pose" not in views[0]:
             views[0]["camera_pose"] = np.ones((4, 4), dtype=np.float32)

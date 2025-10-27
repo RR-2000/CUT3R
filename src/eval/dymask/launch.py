@@ -101,8 +101,8 @@ def eval_dymask_dist(args, model, save_dir=None):
             # check gt and pred shapes and stats
             if not (len(gt_dymasks) == len(pred_dymasks)):
                 print("Mismatch in number of frames between GT and Pred")
-            print(f"GT Dymask Shape: {gt_dymasks[0].shape}, min: {gt_dymasks[0].min().item()}, max: {gt_dymasks[0].max().item()}")
-            print(f"Pred Dymask Shape: {pred_dymasks[0].shape}, min: {pred_dymasks[0].min().item()}, max: {pred_dymasks[0].max().item()}")
+            # print(f"GT Dymask Shape: {gt_dymasks[0].shape}, min: {gt_dymasks[0].min().item()}, max: {gt_dymasks[0].max().item()}")
+            # print(f"Pred Dymask Shape: {pred_dymasks[0].shape}, min: {pred_dymasks[0].min().item()}, max: {pred_dymasks[0].max().item()}")
             # exit()
             save_dymask_masks(
                 pred_dymasks,

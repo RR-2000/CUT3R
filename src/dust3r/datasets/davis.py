@@ -99,6 +99,8 @@ class DAVIS(BaseMultiViewDataset):
     def _get_views(self, idx, resolution, rng, num_views):
         start_id = self.start_img_ids[idx]
         all_image_ids = self.scene_img_list[self.sceneids[start_id]]
+        if num_views == -1:
+            num_views = len(all_image_ids)
         pos, ordered_video = self.get_seq_from_start_id(
             num_views,
             start_id,
@@ -109,6 +111,7 @@ class DAVIS(BaseMultiViewDataset):
             fix_interval_prob=1.0,
         )
         image_idxs = np.array(all_image_ids)[pos]
+        # ordered_video = True
 
 
         views = []
@@ -186,7 +189,7 @@ class DAVIS(BaseMultiViewDataset):
                     reset=False,
                 )
             )
-        assert len(views) == num_views
+        # assert len(views) == num_views
         return views
 
 
