@@ -34,6 +34,7 @@ from .vkitti2 import VirtualKITTI2_Multi  # noqa
 from .waymo import Waymo_Multi  # noqa
 from .wildrgbd import WildRGBD_Multi  # noqa
 from .pointodyssey_multiview import PointOdyssey_Multiview
+from .davis import DAVIS
 
 
 from accelerate import Accelerator
