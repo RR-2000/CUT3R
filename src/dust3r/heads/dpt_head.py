@@ -313,7 +313,7 @@ class DPTPts3dPoseDyMask(nn.Module):
             last_dim=last_dim,
             dim_tokens=dim_tokens,
             hooks_idx=hooks_idx,
-            head_type=head_type,
+            head_type="semseg",
         )
         if hooks_idx is not None:
             pts_dpt_args.update(hooks=hooks_idx)
