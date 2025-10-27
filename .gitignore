@@ -53,3 +53,5 @@ docs/_build/
 *.pth
 data
 src/checkpoints
+src/eval_*
+pbs_logs
