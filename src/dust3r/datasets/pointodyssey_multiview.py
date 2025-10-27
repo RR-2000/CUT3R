@@ -9,6 +9,7 @@ import glob
 sys.path.append(osp.join(osp.dirname(__file__), "..", ".."))
 from tqdm import tqdm
 from scipy.interpolate import griddata
+import imageio.v2 as iio
 from dust3r.datasets.base.base_multiview_dataset import BaseMultiViewDataset
 from dust3r.utils.image import imread_cv2
 from dust3r.utils.geometry import depthmap_to_absolute_camera_coordinates
@@ -23,41 +24,8 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
         super().__init__(*args, **kwargs)
         assert self.split in ["train", "test", "val"]
         self.scenes_to_use = [
-            # 'cab_h_bench_3rd', 'cab_h_bench_ego1', 'cab_h_bench_ego2',
-            "cnb_dlab_0215_3rd",
-            "cnb_dlab_0215_ego1",
-            "cnb_dlab_0225_3rd",
-            "cnb_dlab_0225_ego1",
-            "dancing",
-            "dancingroom0_3rd",
-            "footlab_3rd",
-            "footlab_ego1",
-            "footlab_ego2",
-            "girl",
-            "girl_egocentric",
-            "human_egocentric",
-            "human_in_scene",
-            "human_in_scene1",
-            "kg",
-            "kg_ego1",
-            "kg_ego2",
-            "kitchen_gfloor",
-            "kitchen_gfloor_ego1",
-            "kitchen_gfloor_ego2",
-            "scene_carb_h_tables",
-            "scene_carb_h_tables_ego1",
-            "scene_carb_h_tables_ego2",
-            "scene_j716_3rd",
-            "scene_j716_ego1",
-            "scene_j716_ego2",
-            "scene_recording_20210910_S05_S06_0_3rd",
-            "scene_recording_20210910_S05_S06_0_ego2",
-            "scene1_0129",
-            "scene1_0129_ego",
-            "seminar_h52_3rd",
-            "seminar_h52_ego1",
-            "seminar_h52_ego2",
-        ]
+            None,
+        ]# TODO: specify scenes if needed
         self.loaded_data = self._load_data(self.split)
 
     def _load_data(self, split):
@@ -157,14 +125,22 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
 
             # Load RGB image
             rgb_image = imread_cv2(osp.join(rgb_dir, "rgb_" + basename + ".jpg"))
+            rgb_image_og = rgb_image.copy()
             # Load depthmap
             depthmap = cv2.imread(osp.join(depth_dir, "depth_" + basename + ".png"), cv2.IMREAD_ANYDEPTH)
+            depthmap_og = depthmap.copy()
             depthmap = depthmap.astype(np.float32) / 65535.0 * 1000.0
             depthmap[~np.isfinite(depthmap)] = 0  # invalid
             depthmap[depthmap > 1000] = 0.0
 
             # cam = np.load(osp.join(cam_dir, basename + ".npz"))
-            camera_pose = np.load(osp.join(cam_pose_dir, "extrinsic_" + basename + ".npy"))
+            extrinsics = np.load(osp.join(cam_pose_dir, "extrinsic_" + basename + ".npy"))
+            R = extrinsics[:3,:3]
+            t = extrinsics[:3,3]
+            camera_pose = np.eye(4, dtype=np.float32)
+            camera_pose[:3,:3] = R.T
+            camera_pose[:3,3] = -R.T @ t
+
             intrinsics = np.load(osp.join(cam_intr_dir, "intrinsic_" + basename + ".npy"))
             rgb_image, depthmap, intrinsics = self._crop_resize_if_necessary(
                 rgb_image, depthmap, intrinsics, resolution, rng=rng, info=view_idx
@@ -180,12 +156,26 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
                 depthmap, intrinsics, camera_pose
             )
 
-            # load dynamic mask
+            # No need to reshape as pts3d is already in HxWx3
+            # compute dynamic mask based on trajs_3d
             is_same = np.all(np.isclose(trajs_3d_stack, trajs_3d_stack[v:v+1]), axis=(0,2))
             dynamic_mask = np.logical_not(is_same)
+            
+            # print(trajs_3d_stack[v].shape, dynamic_mask.shape, pts3d.shape)
             dynamic_mask = griddata(trajs_3d_stack[v], dynamic_mask, pts3d, method='nearest', fill_value=0).astype(np.float32)
+            # print(f"Dynamic mask stats for view {v} of shape {dynamic_mask.shape}: min {dynamic_mask.min()}, max {dynamic_mask.max()}, mean {dynamic_mask.mean()}, sum {dynamic_mask.sum()}")
             dynamic_mask = np.clip(dynamic_mask, 0, 1)
-
+            # # save img, depth, dynamic mask as images for visualization
+            # os.makedirs('./tmp', exist_ok=True)
+            # iio.imwrite(osp.join('./tmp', f'rgb_{view_idx:04d}.png'), (np.array(rgb_image) * 255).astype(np.uint8))
+            # iio.imwrite(osp.join('./tmp', f'rgb_og_{view_idx:04d}.png'), (np.array(rgb_image_og) * 255).astype(np.uint8))
+            # depth_vis = (depthmap / depthmap.max() * 255).astype(np.uint8)
+            # iio.imwrite(osp.join('./tmp', f'depth_{view_idx:04d}.png'), depth_vis)
+            # iio.imwrite(osp.join('./tmp', f'depth_og_{view_idx:04d}.png'), (np.array(depthmap_og)).astype(np.uint8))
+            # dyn_vis = (dynamic_mask * 255).astype(np.uint8)
+            # iio.imwrite(osp.join('./tmp', f'dynmask_{view_idx:04d}.png'), dyn_vis)
+            # print(np.unique(dynamic_mask, return_counts=True))
+            # exit()
             views.append(dict(
                     img=rgb_image,
                     depthmap=depthmap.astype(np.float32),
