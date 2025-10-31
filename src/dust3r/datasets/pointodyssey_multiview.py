@@ -151,7 +151,7 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
                 self.is_metric, v, rng, p=[0.9, 0.05, 0.05]
             )
 
-            # 3D points and valid mask
+            # 3D points and valid mask, Dense Approximation
             pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(
                 depthmap, intrinsics, camera_pose
             )
@@ -159,12 +159,44 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
             # No need to reshape as pts3d is already in HxWx3
             # compute dynamic mask based on trajs_3d
             is_same = np.all(np.isclose(trajs_3d_stack, trajs_3d_stack[v:v+1]), axis=(0,2))
-            dynamic_mask = np.logical_not(is_same)
+            dynamic_mask_3d = np.logical_not(is_same)
             
             # print(trajs_3d_stack[v].shape, dynamic_mask.shape, pts3d.shape)
-            dynamic_mask = griddata(trajs_3d_stack[v], dynamic_mask, pts3d, method='nearest', fill_value=0).astype(np.float32)
+            dynamic_mask = griddata(trajs_3d_stack[v], dynamic_mask_3d, pts3d, method='nearest', fill_value=0).astype(np.float32)
             # print(f"Dynamic mask stats for view {v} of shape {dynamic_mask.shape}: min {dynamic_mask.min()}, max {dynamic_mask.max()}, mean {dynamic_mask.mean()}, sum {dynamic_mask.sum()}")
             dynamic_mask = np.clip(dynamic_mask, 0, 1)
+
+            # 3D points and valid mask, Sparse GT
+            # Project points to image to get valid mask
+            tracks_3d_v = trajs_3d_stack[v].reshape(-1, 3)
+            proj = (intrinsics @ (R @ tracks_3d_v.T + t[:, np.newaxis])).T  # Nx3
+            valid_z = np.abs(proj[:, 2]) > 1e-8
+            proj_xy = np.zeros_like(proj[:, :2])
+            proj_xy[valid_z] = proj[valid_z, :2] / proj[valid_z, 2:3]
+            h, w = depthmap.shape
+            proj_x_int = np.round(proj_xy[:, 0]).astype(np.int32)
+            proj_y_int = np.round(proj_xy[:, 1]).astype(np.int32)
+            valid_proj_mask = (
+                (proj_x_int >= 0)
+                & (proj_x_int < w)
+                & (proj_y_int >= 0)
+                & (proj_y_int < h)
+            )
+            # assert np.sum(valid_proj_mask) > 0, f"No valid projections for view {v} in scene {self.scenes[scene_id]}"
+            assert len(valid_proj_mask) == len(tracks_3d_v) and len(valid_proj_mask) == len(dynamic_mask_3d), f'Mismatch in lengths for view {v} in scene {self.scenes[scene_id]}'
+            
+            proj_x_int = proj_x_int[valid_proj_mask]
+            proj_y_int = proj_y_int[valid_proj_mask]
+            tracks_3d_v = tracks_3d_v[valid_proj_mask]
+
+            # Get valid pixels based on projected points
+            valid_mask_sparse = np.zeros_like(depthmap, dtype=bool)
+            valid_mask_sparse[proj_y_int, proj_x_int] = True
+
+            # Create a sparse dynamic mask
+            dynamic_mask_sparse = np.zeros_like(depthmap, dtype=np.float32)
+            dynamic_mask_sparse[proj_y_int, proj_x_int] = dynamic_mask_3d[valid_proj_mask]
+
             # # save img, depth, dynamic mask as images for visualization
             # os.makedirs('./tmp', exist_ok=True)
             # iio.imwrite(osp.join('./tmp', f'rgb_{view_idx:04d}.png'), (np.array(rgb_image) * 255).astype(np.uint8))
@@ -175,6 +207,10 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
             # dyn_vis = (dynamic_mask * 255).astype(np.uint8)
             # iio.imwrite(osp.join('./tmp', f'dynmask_{view_idx:04d}.png'), dyn_vis)
             # print(np.unique(dynamic_mask, return_counts=True))
+            # # Save sparse dynamic mask and valid mask
+            # dyn_sparse_vis = (dynamic_mask_sparse / (dynamic_mask_sparse.max() + 1e-8) * 255).astype(np.uint8)
+            # iio.imwrite(osp.join('./tmp', f'dynmask_sparse_{view_idx:04d}.png'), dyn_sparse_vis)
+            # iio.imwrite(osp.join('./tmp', f'validmask_sparse_{view_idx:04d}.png'), (valid_mask_sparse.astype(np.uint8) * 255).astype(np.uint8))
             # exit()
             views.append(dict(
                     img=rgb_image,
@@ -194,6 +230,8 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
                     depth_only=False,
                     single_view=False,
                     reset=False,
+                    dynamic_mask_sparse=dynamic_mask_sparse,
+                    valid_mask_sparse=valid_mask_sparse,
                 )
             )
         assert len(views) == num_views

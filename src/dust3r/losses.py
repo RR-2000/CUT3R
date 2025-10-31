@@ -1210,3 +1210,26 @@ class MMaskLoss(Criterion, MultiLoss):
             details[f"pred_dymask_{i+1}"] = pred_dymasks[i]
         dymask_loss = sum(ls) / len(ls)
         return dymask_loss, details
+
+class MMaskLossSparse(Criterion, MultiLoss):
+    def __init__(self, criterion):
+        super().__init__(criterion)
+
+    def img_loss(self, a, b):
+        return self.criterion(a, b)
+
+    def compute_loss(self, gts, preds, **kw):
+        gt_dymasks = [gt["dynamic_mask_sparse"].unsqueeze(-1) for gt in gts]
+        valid_masks = [gt["valid_mask_sparse"].unsqueeze(-1) for gt in gts]
+        pred_dymasks = [pred["dynamic_mask"] for pred in preds]
+        ls = [
+            self.img_loss(pred_dymask*valid_mask, gt_dymask*valid_mask)*(valid_mask.numel()/valid_mask.sum().clamp(min=1))
+            for pred_dymask, gt_dymask, valid_mask in zip(pred_dymasks, gt_dymasks, valid_masks)
+        ]
+        details = {}
+        self_name = type(self).__name__
+        for i, l in enumerate(ls):
+            details[self_name + f"_dymask/{i+1}"] = float(l)
+            details[f"pred_dymask_{i+1}"] = pred_dymasks[i]
+        dymask_loss = sum(ls) / len(ls)
+        return dymask_loss, details

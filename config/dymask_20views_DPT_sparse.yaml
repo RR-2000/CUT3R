@@ -11,9 +11,9 @@ n_corres_train: 0
 n_corres_test: 0
 
 # train_criterion: ConfLoss(Regr3DPoseBatchList(L21, norm_mode='?avg_dis'), alpha=0.2) + RGBLoss(MSE)
-train_criterion: MMaskLoss(BCE)
+train_criterion: MMaskLossSparse(BCE)
 # test_criterion: Regr3DPose(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + Regr3DPose_ScaleInv(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + RGBLoss(L21)
-test_criterion: MMaskLoss(BCE)
+test_criterion: MMaskLossSparse(BCE)
 
 resolution: [(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)]
 
@@ -62,7 +62,7 @@ allow_repeat: True
 train_dataset: 10000 @ PointOdyssey_Multiview(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 test_dataset: 100 @ PointOdyssey_Multiview(allow_repeat=${allow_repeat}, split='test', ROOT="/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey", resolution=(512, 384), num_views=${num_test_views}, n_corres=${n_corres_test})
 seed: 0
-batch_size: 8
+batch_size: 6
 accum_iter: 4
 gradient_checkpointing: True
 epochs: 40
@@ -88,7 +88,7 @@ keep_freq: 1
 print_freq: 10
 print_img_freq: 50000000
 num_imgs_vis: 4
-save_dir: 'checkpoints/segmentation_no_logits_fixed_mask'
+save_dir: 'checkpoints/sparse_segmentation_no_logits_fixed_mask'
 exp_name: 'dpt_512_vary_4_64_PO'
 task: 'cut3r'
 logdir: ./${save_dir}/${exp_name}/logs
