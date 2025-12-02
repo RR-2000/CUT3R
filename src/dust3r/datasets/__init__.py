@@ -35,6 +35,7 @@ from .waymo import Waymo_Multi  # noqa
 from .wildrgbd import WildRGBD_Multi  # noqa
 from .pointodyssey_multiview import PointOdyssey_Multiview
 from .davis import DAVIS
+from .stereo4d import Stereo4D_Multiview
 
 
 from accelerate import Accelerator
