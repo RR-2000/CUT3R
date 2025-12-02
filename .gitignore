@@ -55,3 +55,4 @@ data
 src/checkpoints
 src/eval_*
 pbs_logs
+sample*/
