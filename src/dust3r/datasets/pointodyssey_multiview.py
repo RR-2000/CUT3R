@@ -230,8 +230,8 @@ class PointOdyssey_Multiview(BaseMultiViewDataset):
                     depth_only=False,
                     single_view=False,
                     reset=False,
-                    dynamic_mask_sparse=dynamic_mask_sparse,
-                    valid_mask_sparse=valid_mask_sparse,
+                    # dynamic_mask_sparse=dynamic_mask_sparse,
+                    # valid_mask_sparse=valid_mask_sparse,
                 )
             )
         assert len(views) == num_views
