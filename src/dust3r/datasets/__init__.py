@@ -36,6 +36,8 @@ from .wildrgbd import WildRGBD_Multi  # noqa
 from .pointodyssey_multiview import PointOdyssey_Multiview
 from .davis import DAVIS
 from .stereo4d import Stereo4D_Multiview
+from .spring_dymask import Spring_DyMask
+from .kubric_dymask import Kubric_DyMask
 
 
 from accelerate import Accelerator
