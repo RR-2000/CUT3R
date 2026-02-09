@@ -5,7 +5,7 @@ long_context: True
 fixed_length: False
 resume: null
 benchmark: False
-num_views : 20
+num_views : 4
 num_test_views : 10
 n_corres_train: 0
 n_corres_test: 0
@@ -59,11 +59,9 @@ allow_repeat: True
 # dataset32: MP3D_Multi(allow_repeat=${allow_repeat}, split=None, ROOT="../../data/custom_data/processed_mp3d/", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 
 
-train_dataset:  5000 @ PointOdyssey_Multiview(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train}) +
-                2000 @ Spring_DyMask(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_5/spring/spring", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train}) +
-                5000 @ Kubric_DyMask(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_5/kubric_movi_f", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train}) +
-               10000 @ DynamicReplica_DyMask(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_3/dymask_datasets/DynamicReplica", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
-
+train_dataset: 10000 @ PointOdyssey_Multiview(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train}) +
+                5000 @ Spring_DyMask(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_3/dymask_datasets/spring/spring", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train}) +
+                5000 @ Kubric_DyMask(allow_repeat=${allow_repeat}, split='train', ROOT="/mnt/rdata4_3/kubric_movi_f/", aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208), (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 test_dataset: 100 @ PointOdyssey_Multiview(allow_repeat=${allow_repeat}, split='test', ROOT="/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey", resolution=(512, 384), num_views=${num_test_views}, n_corres=${n_corres_test})
 seed: 0
 batch_size: 8
@@ -92,7 +90,7 @@ keep_freq: 1
 print_freq: 10
 print_img_freq: 50000000
 num_imgs_vis: 4
-save_dir: 'checkpoints/segmentation_no_logits_fixed_mask+Spring+Kubric+DynReplica'
+save_dir: 'checkpoints/segmentation_no_logits_fixed_mask+Spring+Kubric_4_views'
 exp_name: 'dpt_512_vary_4_64_PO'
 task: 'cut3r'
 logdir: /mnt/rdata4_3/dymask_datasets/CUT3R/${save_dir}/${exp_name}/logs
