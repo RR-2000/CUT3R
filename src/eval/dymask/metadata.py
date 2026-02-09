@@ -1,15 +1,19 @@
-allow_repeat=False
-split='test'
-ROOT_PO='/mnt/rdata4_6/kx_data/4d_dataset/point_odyssey'
-ROOT_DAVIS='/home/ramanathan/data/DAVIS-2017'
-resolution=(512, 384)
-num_views=20
-n_corres=0
+import os
+import glob
+from tqdm import tqdm
 
-metadata = {
-    "PointOdyssey": f"100 @ PointOdyssey_Multiview(allow_repeat={allow_repeat}, split='test', ROOT='{ROOT_PO}', resolution={resolution}, num_views={num_views}, n_corres={n_corres})",
-    "Davis-16": f"20 @ DAVIS(allow_repeat={allow_repeat}, version='2016', split='test', ROOT='{ROOT_DAVIS}', resolution={resolution}, num_views={-1}, n_corres={n_corres})",
-    "Davis-17": f"30 @ DAVIS(allow_repeat={allow_repeat}, version='2017', split='test', ROOT='{ROOT_DAVIS}', resolution={resolution}, num_views={-1}, n_corres={n_corres})",
-    "Davis-All": f"50 @ DAVIS(allow_repeat={allow_repeat}, version='all', split='test', ROOT='{ROOT_DAVIS}', resolution={resolution}, num_views={-1}, n_corres={n_corres})",
-
+# Define the merged dataset metadata dictionary
+dataset_metadata = {
+    "davis": {
+        "img_path": "/home/ramanathan/data/DAVIS-2017/JPEGImages/Full-Resolution",
+        "mask_path": "/home/ramanathan/data/DAVIS-2017/Annotations/Full-Resolution",
+        "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq),
+        "gt_traj_func": lambda img_path, anno_path, seq: None,
+        "traj_format": None,
+        "seq_list": None,
+        "full_seq": True,
+        "mask_path_seq_func": lambda mask_path, seq: os.path.join(mask_path, seq),
+        "skip_condition": None,
+        "process_func": None,  # Not used in mono depth estimation
+    },
 }
