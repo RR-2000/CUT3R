@@ -31,169 +31,369 @@ def group_by_directory(pathes, idx=-1):
     return grouped_pathes
 
 
-def Jaccard_IoU(mask1, mask2):
+def depth2disparity(depth, return_mask=False):
+    if isinstance(depth, torch.Tensor):
+        disparity = torch.zeros_like(depth)
+    elif isinstance(depth, np.ndarray):
+        disparity = np.zeros_like(depth)
+    non_negtive_mask = depth > 0
+    disparity[non_negtive_mask] = 1.0 / depth[non_negtive_mask]
+    if return_mask:
+        return disparity, non_negtive_mask
+    else:
+        return disparity
+
+
+def absolute_error_loss(params, predicted_depth, ground_truth_depth):
+    s, t = params
+
+    predicted_aligned = s * predicted_depth + t
+
+    abs_error = np.abs(predicted_aligned - ground_truth_depth)
+    return np.sum(abs_error)
+
+
+def absolute_value_scaling(predicted_depth, ground_truth_depth, s=1, t=0):
+    predicted_depth_np = predicted_depth.cpu().numpy().reshape(-1)
+    ground_truth_depth_np = ground_truth_depth.cpu().numpy().reshape(-1)
+
+    initial_params = [s, t]  # s = 1, t = 0
+
+    result = minimize(
+        absolute_error_loss,
+        initial_params,
+        args=(predicted_depth_np, ground_truth_depth_np),
+    )
+
+    s, t = result.x
+    return s, t
+
+
+def absolute_value_scaling2(
+    predicted_depth,
+    ground_truth_depth,
+    s_init=1.0,
+    t_init=0.0,
+    lr=1e-4,
+    max_iters=1000,
+    tol=1e-6,
+):
+    # Initialize s and t as torch tensors with requires_grad=True
+    s = torch.tensor(
+        [s_init],
+        requires_grad=True,
+        device=predicted_depth.device,
+        dtype=predicted_depth.dtype,
+    )
+    t = torch.tensor(
+        [t_init],
+        requires_grad=True,
+        device=predicted_depth.device,
+        dtype=predicted_depth.dtype,
+    )
+
+    optimizer = torch.optim.Adam([s, t], lr=lr)
+
+    prev_loss = None
+
+    for i in range(max_iters):
+        optimizer.zero_grad()
+
+        # Compute predicted aligned depth
+        predicted_aligned = s * predicted_depth + t
+
+        # Compute absolute error
+        abs_error = torch.abs(predicted_aligned - ground_truth_depth)
+
+        # Compute loss
+        loss = torch.sum(abs_error)
+
+        # Backpropagate
+        loss.backward()
+
+        # Update parameters
+        optimizer.step()
+
+        # Check convergence
+        if prev_loss is not None and torch.abs(prev_loss - loss) < tol:
+            break
+
+        prev_loss = loss.item()
+
+    return s.detach().item(), t.detach().item()
+
+
+def depth_evaluation(
+    predicted_depth_original,
+    ground_truth_depth_original,
+    max_depth=80,
+    custom_mask=None,
+    post_clip_min=None,
+    post_clip_max=None,
+    pre_clip_min=None,
+    pre_clip_max=None,
+    align_with_lstsq=False,
+    align_with_lad=False,
+    align_with_lad2=False,
+    metric_scale=False,
+    lr=1e-4,
+    max_iters=1000,
+    use_gpu=False,
+    align_with_scale=False,
+    disp_input=False,
+):
     """
-    Calculate the Jaccard IoU between two binary masks.
+    Evaluate the depth map using various metrics and return a depth error parity map, with an option for least squares alignment.
 
     Args:
-        mask1 (numpy.ndarray): First binary mask
-        mask2 (numpy.ndarray): Second binary mask
+        predicted_depth (numpy.ndarray or torch.Tensor): The predicted depth map.
+        ground_truth_depth (numpy.ndarray or torch.Tensor): The ground truth depth map.
+        max_depth (float): The maximum depth value to consider. Default is 80 meters.
+        align_with_lstsq (bool): If True, perform least squares alignment of the predicted depth with ground truth.
 
     Returns:
-        float: Jaccard IoU value
+        dict: A dictionary containing the evaluation metrics.
+        torch.Tensor: The depth error parity map.
     """
-    intersection = np.logical_and(mask1, mask2).sum()
-    union = np.logical_or(mask1, mask2).sum()
-    if union == 0:
-        return 1.0  # Both masks are empty
+    if isinstance(predicted_depth_original, np.ndarray):
+        predicted_depth_original = torch.from_numpy(predicted_depth_original)
+    if isinstance(ground_truth_depth_original, np.ndarray):
+        ground_truth_depth_original = torch.from_numpy(ground_truth_depth_original)
+    if custom_mask is not None and isinstance(custom_mask, np.ndarray):
+        custom_mask = torch.from_numpy(custom_mask)
+
+    # if the dimension is 3, flatten to 2d along the batch dimension
+    if predicted_depth_original.dim() == 3:
+        _, h, w = predicted_depth_original.shape
+        predicted_depth_original = predicted_depth_original.view(-1, w)
+        ground_truth_depth_original = ground_truth_depth_original.view(-1, w)
+        if custom_mask is not None:
+            custom_mask = custom_mask.view(-1, w)
+
+    # put to device
+    if use_gpu:
+        predicted_depth_original = predicted_depth_original.cuda()
+        ground_truth_depth_original = ground_truth_depth_original.cuda()
+
+    # Filter out depths greater than max_depth
+    if max_depth is not None:
+        mask = (ground_truth_depth_original > 0) & (
+            ground_truth_depth_original < max_depth
+        )
     else:
-        return float(intersection) / union
+        mask = ground_truth_depth_original > 0
+    predicted_depth = predicted_depth_original[mask]
+    ground_truth_depth = ground_truth_depth_original[mask]
 
-############# Based on davis2017 metrics db_eval_boundary #############
+    # Clip the depth values
+    if pre_clip_min is not None:
+        predicted_depth = torch.clamp(predicted_depth, min=pre_clip_min)
+    if pre_clip_max is not None:
+        predicted_depth = torch.clamp(predicted_depth, max=pre_clip_max)
 
-def boundary_eval(foreground_mask, gt_mask, void_pixels=None, bound_th=0.008):
-    """
-    Compute mean,recall and decay from per-frame evaluation.
-    Calculates precision/recall for boundaries between foreground_mask and
-    gt_mask using morphological operators to speed it up.
+    if disp_input:  # align the pred to gt in the disparity space
+        real_gt = ground_truth_depth.clone()
+        ground_truth_depth = 1 / (ground_truth_depth + 1e-8)
 
-    Arguments:
-        foreground_mask (ndarray): binary segmentation image.
-        gt_mask         (ndarray): binary annotated image.
-        void_pixels     (ndarray): optional mask with void pixels
+    # various alignment methods
+    if metric_scale:
+        predicted_depth = predicted_depth
+    elif align_with_lstsq:
+        # Convert to numpy for lstsq
+        predicted_depth_np = predicted_depth.cpu().numpy().reshape(-1, 1)
+        ground_truth_depth_np = ground_truth_depth.cpu().numpy().reshape(-1, 1)
 
-    Returns:
-        F (float): boundaries F-measure
-    """
-    # import pdb; pdb.set_trace()
-    assert np.atleast_3d(foreground_mask).shape[2] == 1
-    if void_pixels is not None:
-        void_pixels = void_pixels.astype(bool)
+        # Add a column of ones for the shift term
+        A = np.hstack([predicted_depth_np, np.ones_like(predicted_depth_np)])
+
+        # Solve for scale (s) and shift (t) using least squares
+        result = np.linalg.lstsq(A, ground_truth_depth_np, rcond=None)
+        s, t = result[0][0], result[0][1]
+
+        # convert to torch tensor
+        s = torch.tensor(s, device=predicted_depth_original.device)
+        t = torch.tensor(t, device=predicted_depth_original.device)
+
+        # Apply scale and shift
+        predicted_depth = s * predicted_depth + t
+    elif align_with_lad:
+        s, t = absolute_value_scaling(
+            predicted_depth,
+            ground_truth_depth,
+            s=torch.median(ground_truth_depth) / torch.median(predicted_depth),
+        )
+        predicted_depth = s * predicted_depth + t
+    elif align_with_lad2:
+        s_init = (
+            torch.median(ground_truth_depth) / torch.median(predicted_depth)
+        ).item()
+        s, t = absolute_value_scaling2(
+            predicted_depth,
+            ground_truth_depth,
+            s_init=s_init,
+            lr=lr,
+            max_iters=max_iters,
+        )
+        predicted_depth = s * predicted_depth + t
+    elif align_with_scale:
+        # Compute initial scale factor 's' using the closed-form solution (L2 norm)
+        dot_pred_gt = torch.nanmean(ground_truth_depth)
+        dot_pred_pred = torch.nanmean(predicted_depth)
+        s = dot_pred_gt / dot_pred_pred
+
+        # Iterative reweighted least squares using the Weiszfeld method
+        for _ in range(10):
+            # Compute residuals between scaled predictions and ground truth
+            residuals = s * predicted_depth - ground_truth_depth
+            abs_residuals = (
+                residuals.abs() + 1e-8
+            )  # Add small constant to avoid division by zero
+
+            # Compute weights inversely proportional to the residuals
+            weights = 1.0 / abs_residuals
+
+            # Update 's' using weighted sums
+            weighted_dot_pred_gt = torch.sum(
+                weights * predicted_depth * ground_truth_depth
+            )
+            weighted_dot_pred_pred = torch.sum(weights * predicted_depth**2)
+            s = weighted_dot_pred_gt / weighted_dot_pred_pred
+
+        # Optionally clip 's' to prevent extreme scaling
+        s = s.clamp(min=1e-3)
+
+        # Detach 's' if you want to stop gradients from flowing through it
+        s = s.detach()
+
+        # Apply the scale factor to the predicted depth
+        predicted_depth = s * predicted_depth
+
     else:
-        void_pixels = np.zeros_like(foreground_mask).astype(bool)
+        # Align the predicted depth with the ground truth using median scaling
+        scale_factor = torch.median(ground_truth_depth) / torch.median(predicted_depth)
+        predicted_depth *= scale_factor
 
-    bound_pix = bound_th if bound_th >= 1 else \
-        np.ceil(bound_th * np.linalg.norm(foreground_mask.shape))
+    if disp_input:
+        # convert back to depth
+        ground_truth_depth = real_gt
+        predicted_depth = depth2disparity(predicted_depth)
 
-    # Get the pixel boundaries of both masks
-    fg_boundary = _seg2bmap(foreground_mask * np.logical_not(void_pixels))
-    gt_boundary = _seg2bmap(gt_mask * np.logical_not(void_pixels))
+    # Clip the predicted depth values
+    if post_clip_min is not None:
+        predicted_depth = torch.clamp(predicted_depth, min=post_clip_min)
+    if post_clip_max is not None:
+        predicted_depth = torch.clamp(predicted_depth, max=post_clip_max)
 
-    from skimage.morphology import disk
+    if custom_mask is not None:
+        assert custom_mask.shape == ground_truth_depth_original.shape
+        mask_within_mask = custom_mask.cpu()[mask]
+        predicted_depth = predicted_depth[mask_within_mask]
+        ground_truth_depth = ground_truth_depth[mask_within_mask]
 
-    # fg_dil = binary_dilation(fg_boundary, disk(bound_pix))
-    fg_dil = cv2.dilate(fg_boundary.astype(np.uint8), disk(bound_pix).astype(np.uint8))
-    # gt_dil = binary_dilation(gt_boundary, disk(bound_pix))
-    gt_dil = cv2.dilate(gt_boundary.astype(np.uint8), disk(bound_pix).astype(np.uint8))
+    # Calculate the metrics
+    abs_rel = torch.mean(
+        torch.abs(predicted_depth - ground_truth_depth) / ground_truth_depth
+    ).item()
+    sq_rel = torch.mean(
+        ((predicted_depth - ground_truth_depth) ** 2) / ground_truth_depth
+    ).item()
 
-    # Get the intersection
-    gt_match = gt_boundary * fg_dil
-    fg_match = fg_boundary * gt_dil
+    # Correct RMSE calculation
+    rmse = torch.sqrt(torch.mean((predicted_depth - ground_truth_depth) ** 2)).item()
 
-    # Area of the intersection
-    n_fg = np.sum(fg_boundary)
-    n_gt = np.sum(gt_boundary)
+    # Clip the depth values to avoid log(0)
+    predicted_depth = torch.clamp(predicted_depth, min=1e-5)
+    log_rmse = torch.sqrt(
+        torch.mean((torch.log(predicted_depth) - torch.log(ground_truth_depth)) ** 2)
+    ).item()
 
-    # % Compute precision and recall
-    if n_fg == 0 and n_gt > 0:
-        precision = 1
-        recall = 0
-    elif n_fg > 0 and n_gt == 0:
-        precision = 0
-        recall = 1
-    elif n_fg == 0 and n_gt == 0:
-        precision = 1
-        recall = 1
+    # Calculate the accuracy thresholds
+    max_ratio = torch.maximum(
+        predicted_depth / ground_truth_depth, ground_truth_depth / predicted_depth
+    )
+    threshold_0 = torch.mean((max_ratio < 1.0).float()).item()
+    threshold_1 = torch.mean((max_ratio < 1.25).float()).item()
+    threshold_2 = torch.mean((max_ratio < 1.25**2).float()).item()
+    threshold_3 = torch.mean((max_ratio < 1.25**3).float()).item()
+
+    # Compute the depth error parity map
+    if metric_scale:
+        predicted_depth_original = predicted_depth_original
+        if disp_input:
+            predicted_depth_original = depth2disparity(predicted_depth_original)
+        depth_error_parity_map = (
+            torch.abs(predicted_depth_original - ground_truth_depth_original)
+            / ground_truth_depth_original
+        )
+    elif align_with_lstsq or align_with_lad or align_with_lad2:
+        predicted_depth_original = predicted_depth_original * s + t
+        if disp_input:
+            predicted_depth_original = depth2disparity(predicted_depth_original)
+        depth_error_parity_map = (
+            torch.abs(predicted_depth_original - ground_truth_depth_original)
+            / ground_truth_depth_original
+        )
+    elif align_with_scale:
+        predicted_depth_original = predicted_depth_original * s
+        if disp_input:
+            predicted_depth_original = depth2disparity(predicted_depth_original)
+        depth_error_parity_map = (
+            torch.abs(predicted_depth_original - ground_truth_depth_original)
+            / ground_truth_depth_original
+        )
     else:
-        precision = np.sum(fg_match) / float(n_fg)
-        recall = np.sum(gt_match) / float(n_gt)
+        predicted_depth_original = predicted_depth_original * scale_factor
+        if disp_input:
+            predicted_depth_original = depth2disparity(predicted_depth_original)
+        depth_error_parity_map = (
+            torch.abs(predicted_depth_original - ground_truth_depth_original)
+            / ground_truth_depth_original
+        )
 
-    # Compute F measure
-    if precision + recall == 0:
-        F = 0
-    else:
-        F = 2 * precision * recall / (precision + recall)
+    # Reshape the depth_error_parity_map back to the original image size
+    depth_error_parity_map_full = torch.zeros_like(ground_truth_depth_original)
+    depth_error_parity_map_full = torch.where(
+        mask, depth_error_parity_map, depth_error_parity_map_full
+    )
 
-    return F
+    predict_depth_map_full = predicted_depth_original
+    gt_depth_map_full = torch.zeros_like(ground_truth_depth_original)
+    gt_depth_map_full = torch.where(
+        mask, ground_truth_depth_original, gt_depth_map_full
+    )
 
-def _seg2bmap(seg, width=None, height=None):
-    """
-    From a segmentation, compute a binary boundary map with 1 pixel wide
-    boundaries.  The boundary pixels are offset by 1/2 pixel towards the
-    origin from the actual segment boundary.
-    Arguments:
-        seg     : Segments labeled from 1..k as numpy array.
-        width	  :	Width of desired bmap  <= seg.shape[1]
-        height  :	Height of desired bmap <= seg.shape[0]
-    Returns:
-        bmap (numpy.ndarray):	Binary boundary map.
-    """
-    seg = seg.astype(bool)
-    seg[seg > 0] = 1
+    num_valid_pixels = (
+        torch.sum(mask).item()
+        if custom_mask is None
+        else torch.sum(mask_within_mask).item()
+    )
+    if num_valid_pixels == 0:
+        (
+            abs_rel,
+            sq_rel,
+            rmse,
+            log_rmse,
+            threshold_0,
+            threshold_1,
+            threshold_2,
+            threshold_3,
+        ) = (0, 0, 0, 0, 0, 0, 0, 0)
 
-    assert np.atleast_3d(seg).shape[2] == 1
-
-    width = seg.shape[1] if width is None else width
-    height = seg.shape[0] if height is None else height
-
-    h, w = seg.shape[:2]
-
-    ar1 = float(width) / float(height)
-    ar2 = float(w) / float(h)
-
-    assert not (
-        width > w | height > h | abs(ar1 - ar2) > 0.01
-    ), "Can't convert %dx%d seg to %dx%d bmap." % (w, h, width, height)
-
-    e = np.zeros_like(seg)
-    s = np.zeros_like(seg)
-    se = np.zeros_like(seg)
-
-    e[:, :-1] = seg[:, 1:]
-    s[:-1, :] = seg[1:, :]
-    se[:-1, :-1] = seg[1:, 1:]
-
-    b = seg ^ e | seg ^ s | seg ^ se
-    b[-1, :] = seg[-1, :] ^ e[-1, :]
-    b[:, -1] = seg[:, -1] ^ s[:, -1]
-    b[-1, -1] = 0
-
-    if w == width and h == height:
-        bmap = b
-    else:
-        bmap = np.zeros((height, width))
-        for x in range(w):
-            for y in range(h):
-                if b[y, x]:
-                    j = 1 + math.floor((y - 1) + height / h)
-                    i = 1 + math.floor((x - 1) + width / h)
-                    bmap[j, i] = 1
-
-    return bmap
-
-def dymask_evaluation(
-    predicted_mask_original,
-    ground_truth_mask_original,
-    void_mask_original=None,
-    bound_th=0.008
-):
-    
-    boundary_fmeasure = []
-    jaccard_iou = []
-    for frame_idx in range(ground_truth_mask_original.shape[0]):
-        boundary_fmeasure.append(boundary_eval(
-            predicted_mask_original[frame_idx],
-            ground_truth_mask_original[frame_idx],
-            void_mask_original[frame_idx] if void_mask_original is not None else None,
-            bound_th
-        ))
-        jaccard_iou.append(Jaccard_IoU(
-            predicted_mask_original[frame_idx],
-            ground_truth_mask_original[frame_idx]
-        ))
     results = {
-        "J": np.array(jaccard_iou),
-        "F": np.array(boundary_fmeasure),
+        "Abs Rel": abs_rel,
+        "Sq Rel": sq_rel,
+        "RMSE": rmse,
+        "Log RMSE": log_rmse,
+        "δ < 1.": threshold_0,
+        "δ < 1.25": threshold_1,
+        "δ < 1.25^2": threshold_2,
+        "δ < 1.25^3": threshold_3,
+        "valid_pixels": num_valid_pixels,
     }
 
-    return results
+    return (
+        results,
+        depth_error_parity_map_full,
+        predict_depth_map_full,
+        gt_depth_map_full,
+    )

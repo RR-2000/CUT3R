@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-# import roma
+import roma
 from copy import deepcopy
 import tqdm
 import matplotlib as mpl
@@ -89,14 +89,6 @@ def save_depth_maps(pts3ds_self, path, conf_self=None):
     # images[0].save(f'{path}/_depth_maps.gif', save_all=True, append_images=images[1:], duration=100, loop=0)
 
     return depth_maps
-
-def save_dymask_masks(dymasks, path, tag="", npy=True):
-    for i, dymask in enumerate(dymasks):
-        if npy:
-            np.save(f"{path}/{tag}frame_{i:04d}.npy", dymask.detach().cpu().numpy())
-        else:
-            iio.imwrite(f"{path}/{tag}frame_{i:04d}.png", (dymask.detach().cpu().numpy().squeeze() * 255).astype(np.uint8))
-    return dymasks
 
 
 def get_vertical_colorbar(h, vmin, vmax, cmap_name="jet", label=None, cbar_precision=2):
