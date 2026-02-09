@@ -206,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_location",
         type=str,
-        default='/mnt/rdata4_3/kubric_movi_f/',
+        default='/mnt/rdata4_5/kubric_movi_f/',
         help="path to dataset",
     )
     args = parser.parse_args()
