@@ -50,7 +50,7 @@ dataset_metadata = {
         "process_func": lambda args, img_path: process_nyu(args, img_path),
     },
     "scannet": {
-        "img_path": "data/scannetv2",
+        "img_path": "/home/ramanathan/Methods/monst3r/data/scannetv2",
         "mask_path": None,
         "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq, "color_90"),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(
@@ -120,7 +120,7 @@ dataset_metadata = {
         "process_func": lambda args, img_path: process_scannet(args, img_path),
     },
     "tum": {
-        "img_path": "data/tum",
+        "img_path": "/mnt/rdata4_3/dymask_datasets/tum",
         "mask_path": None,
         "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq, "rgb_90"),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(
@@ -134,8 +134,8 @@ dataset_metadata = {
         "process_func": None,
     },
     "sintel": {
-        "img_path": "data/sintel/training/final",
-        "anno_path": "data/sintel/training/camdata_left",
+        "img_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/final",
+        "anno_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/camdata_left",
         "mask_path": None,
         "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(anno_path, seq),
