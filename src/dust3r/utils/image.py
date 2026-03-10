@@ -150,7 +150,7 @@ def load_images_for_eval(
     else:
         raise ValueError(f"bad {folder_or_list=} ({type(folder_or_list)})")
 
-    supported_images_extensions = [".jpg", ".jpeg", ".png"]
+    supported_images_extensions = [".jpg", ".jpeg", ".png", ".bmp"]
     if heif_support_enabled:
         supported_images_extensions += [".heic", ".heif"]
     supported_images_extensions = tuple(supported_images_extensions)

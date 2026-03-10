@@ -494,6 +494,13 @@ class ARCroco3DStereo(CroCoNet):
                 self.downstream_head.dpt_rgb,
                 self.downstream_head.pose_head,
             ],
+            "3d_predictor": [
+                self.downstream_head.dpt_self,
+                self.downstream_head.final_transform,
+                self.downstream_head.dpt_cross,
+                self.downstream_head.dpt_rgb,
+                self.downstream_head.pose_head,
+            ],
         }
         freeze_all_params(to_be_frozen[freeze])
 

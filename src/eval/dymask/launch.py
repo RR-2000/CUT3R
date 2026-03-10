@@ -52,7 +52,7 @@ def get_args_parser():
     parser.add_argument(
         "--eval_dataset",
         type=str,
-        default="sintel",
+        default="davis",
         choices=list(dataset_metadata.keys()),
     )
     parser.add_argument("--size", type=int, default="224")
@@ -72,7 +72,7 @@ def get_args_parser():
         default=None,
         help="list of sequences for pose evaluation",
     )
-    parser.add_argument("--ttt3r", action="store_true", help="use TTT3R inference")
+    parser.add_argument("--TTT3R", action="store_true", help="use TTT3R inference")
     return parser
 
 def save_masks(args, model, save_dir=None):
@@ -122,7 +122,7 @@ def save_masks_dist(args, model, img_path, save_dir=None, mask_path=None):
                 dir_path = metadata["dir_path_func"](img_path, seq)
 
                 filelist = [
-                    os.path.join(dir_path, name) for name in os.listdir(dir_path)
+                    os.path.join(dir_path, name) for name in os.listdir(dir_path) if name.split('.')[-1].lower() in ["jpg", "png", "jpeg", "bmp", "tiff"]
                 ]
                 filelist.sort()
                 filelist = filelist[:: args.pose_eval_stride]
@@ -135,7 +135,7 @@ def save_masks_dist(args, model, img_path, save_dir=None, mask_path=None):
                     revisit=revisit,
                 )
                 start = time.time()
-                if args.ttt3r:
+                if args.TTT3R:
                     outputs, _ = inference_recurrent_lighter(views, model, device)
                 else:
                     outputs, _ = inference(views, model, device)
@@ -157,10 +157,11 @@ def save_masks_dist(args, model, img_path, save_dir=None, mask_path=None):
                 if "out of memory" in str(e):
                     # Handle OOM
                     torch.cuda.empty_cache()  # Clear the CUDA memory
-                    with open(error_log_path, "a") as f:
-                        f.write(
-                            f"OOM error in sequence {seq}, skipping this sequence.\n"
-                        )
+                    # print(f"Cleared CUDA cache after OOM in sequence {seq}.")
+                    # with open(error_log_path, "a") as f:
+                    #     f.write(
+                    #         f"OOM error in sequence {seq}, skipping this sequence.\n"
+                    #     )
                     print(f"OOM error in sequence {seq}, skipping...")
                 elif "Degenerate covariance rank" in str(
                     e
@@ -180,7 +181,7 @@ if __name__ == "__main__":
     # add_path_to_dust3r(args.weights)
     from dust3r.utils.image import load_images_for_eval as load_images
     from dust3r.post_process import estimate_focal_knowing_depth
-    if args.ttt3r:
+    if args.TTT3R:
         from dust3r.model_TTT3R import ARCroco3DStereo
     else:
         from dust3r.model import ARCroco3DStereo
@@ -203,7 +204,7 @@ if __name__ == "__main__":
         update=True,
         crop=True,
     ):
-        images = load_images(img_paths, size=size, crop=crop)
+        images = load_images(img_paths, size=size, crop=crop, square_ok=True)
         views = []
         if raymaps is None and raymap_mask is None:
             num_views = len(images)
@@ -290,4 +291,5 @@ if __name__ == "__main__":
         return views
 
     model = ARCroco3DStereo.from_pretrained(args.weights)
+    model.eval()
     save_masks(args, model, save_dir=args.output_dir)
