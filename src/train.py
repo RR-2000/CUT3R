@@ -124,7 +124,7 @@ def train(args):
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    if accelerator.is_main_process:
+    if accelerator.is_main_process and args.save_code:
         dst_dir = save_current_code(outdir=args.output_dir)
         printer.info(f"Saving current code to {dst_dir}")
 
