@@ -4,28 +4,30 @@ import numpy as np
 import itertools
 import os
 import sys
+import torch
 
 sys.path.append(osp.join(osp.dirname(__file__), "..", ".."))
 from tqdm import tqdm
 from dust3r.datasets.base.base_multiview_dataset import BaseMultiViewDataset
 from dust3r.utils.image import imread_cv2
 
+
 DEBUG = False
 
-
-class Kubric_DyMask(BaseMultiViewDataset):
+class HOI4D_DyMask(BaseMultiViewDataset):
     def __init__(self, *args, ROOT, **kwargs):
         self.ROOT = ROOT
         self.video = True
         self.is_metric = False
-        self.max_interval = 2
+        self.max_interval = 16
         super().__init__(*args, **kwargs)
-        self.ROOT = os.path.join(self.ROOT, self.split)
 
-        self.loaded_data = self._load_data()
+        self.loaded_data = self._load_data(self.split)
 
-    def _load_data(self):
-        self.scenes = os.listdir(self.ROOT)
+    def _load_data(self, split):
+        assert split == 'train', "Only 'train' split is available for HOI4D_DyMask"
+
+        self.scenes = [scene for scene in os.listdir(os.path.join(self.ROOT)) if os.path.isdir(os.path.join(self.ROOT, scene))]
 
         offset = 0
         scenes = []
@@ -36,22 +38,22 @@ class Kubric_DyMask(BaseMultiViewDataset):
 
         j = 0
         for scene in tqdm(self.scenes):
-            scene_dir = osp.join(self.ROOT, scene)
-            rgb_dir = scene_dir
+            scene_dir = osp.join(self.ROOT, self.split, scene)
+            rgb_dir = osp.join(scene_dir, "rgb")
             basenames = sorted(
-                [f[:-4] for f in os.listdir(rgb_dir) if f.startswith("frame_") and f.endswith(".png")]
-            )[1:-1] # Remove first and last frames for DyMask dataset
+                [f[:-4] for f in os.listdir(rgb_dir) if f.endswith(".jpg")],
+                key=lambda x: float(x.split("-")[-1]),
+            )
             num_imgs = len(basenames)
             img_ids = list(np.arange(num_imgs) + offset)
-            # start_img_ids_ = img_ids[:-self.num_views+1]
             cut_off = (
                 self.num_views if not self.allow_repeat else max(self.num_views // 3, 3)
             )
-            start_img_ids_ = img_ids[: num_imgs - cut_off + 1]
             if num_imgs < cut_off:
                 print(f"Skipping {scene}")
                 continue
 
+            start_img_ids_ = img_ids[: num_imgs - cut_off + 1]
             start_img_ids.extend(start_img_ids_)
             sceneids.extend([j] * num_imgs)
             images.extend(basenames)
@@ -74,17 +76,6 @@ class Kubric_DyMask(BaseMultiViewDataset):
     def get_image_num(self):
         return len(self.images)
 
-    def _quaternion_to_rotation_matrix(self, q):
-        w, x, y, z = q
-        R = np.array(
-            [
-                [1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x**2 + y**2)],
-            ]
-        )
-        return R
-
     def _get_views(self, idx, resolution, rng, num_views):
         start_id = self.start_img_ids[idx]
         all_image_ids = self.scene_img_list[self.sceneids[start_id]]
@@ -98,74 +89,71 @@ class Kubric_DyMask(BaseMultiViewDataset):
             fix_interval_prob=1.0,
         )
         image_idxs = np.array(all_image_ids)[pos]
+        image_basenames = [self.images[i] for i in image_idxs]
 
         views = []
-        scene_id = self.sceneids[image_idxs[0]]
-        scene_dir = osp.join(self.ROOT, self.scenes[scene_id])
-
-        camera_params = np.load(osp.join(scene_dir, "camera_params.npz"))
-        object_info = np.load(osp.join(scene_dir, "object_poses.npz"))
-
         for v, view_idx in enumerate(image_idxs):
-            
-            rgb_dir = scene_dir
-            depth_dir = scene_dir
-            cam_dir = scene_dir
-            dymask_dir = scene_dir
-                
-            basename = self.images[view_idx]
-            frame_idx = int(basename.split("_")[1])
+            scene_id = self.sceneids[view_idx]
+            scene_dir = osp.join(self.ROOT, self.split, self.scenes[scene_id])
+            rgb_dir = osp.join(scene_dir, "rgb")
+            depth_dir = osp.join(scene_dir, "depth")
+            mask_dir = osp.join(scene_dir, "mask")
+            cam_dir = osp.join(self.ROOT, "cam")
 
-            # Load RGB
-            rgb_image = imread_cv2(osp.join(rgb_dir, basename + ".png"))
+            basename = image_basenames[v]
 
-            # print(osp.join(rgb_dir, basename + ".png"))
+            # Load RGB image
+            rgb_image = imread_cv2(osp.join(rgb_dir, basename + ".jpg"))
+
             # Load depthmap
-            depthmap = cv2.imread(osp.join(depth_dir, basename.replace("frame_", "depth_") + ".tiff"), cv2.IMREAD_UNCHANGED)
+            depthmap = cv2.imread(osp.join(depth_dir,  basename + ".png"), cv2.IMREAD_ANYDEPTH)
+            depthmap = depthmap.astype(np.float32) / 10.0 # convert from decimeters to m
+            depthmap[depthmap > 1000] = 0.0 # Cap depth to 1000m
+            depthmap = np.nan_to_num(depthmap, nan=0, posinf=0, neginf=0)
 
-            # Load dynamic_mask
-            # print(osp.join(dymask_dir, basename.replace("frame_left_", "rigidmap_BW_left_") + ".png"))
-            dynamic_mask_raw = self.get_dynamic_mask(
-                seg=cv2.imread(osp.join(dymask_dir, basename.replace("frame_", "segmentation_") + ".png"), cv2.IMREAD_UNCHANGED),
-                obj_positions=object_info["positions"][1:], # exclude background
-                t=frame_idx,
-                threshold=1e-3,
-            )
+            # Load dynamic mask
+            ## TODO: Dymask filtering for moving classes
+            dynamic_mask_raw = imread_cv2(osp.join(mask_dir, basename + ".png"))
+            np_dy = np.asarray(dynamic_mask_raw) > 0  # Convert to binary mask
+            
 
-            # load camera intrinsics and pose
-            cam_position = camera_params["positions"][0, frame_idx]
-            cam_quaternion = camera_params["quaternions"][0, frame_idx]
-            cam_rotation_matrix = self._quaternion_to_rotation_matrix(cam_quaternion)
-            camera_pose = np.eye(4)
-            camera_pose[:3, :3] = cam_rotation_matrix
-            camera_pose[:3, 3] = cam_position
+            if False:
 
-            fov = camera_params["field_of_view"]
-            sensor_width = sensor_height = camera_params["sensor_width"]
-            focal_length = camera_params["focal_length"]
+                cam = np.load(osp.join(cam_dir, basename.split('-')[-1] + ".npz"))
+                camera_pose = cam["pose"]
+                intrinsics = cam["intrinsics"]
+                rgb_image, depthmap, intrinsics = self._crop_resize_if_necessary(
+                    rgb_image, depthmap, intrinsics, resolution, rng=rng, info=view_idx
+                )
+            else:
+                cam = np.load(osp.join(cam_dir, basename + ".npz"))
+                camera_pose = cam["extrinsics"]
+                # convert from open3d to pytroch3d convention (flip x and y to negative)
+                camera_pose[:3, :3] *= np.array([[-1, -1, 1], [-1, -1, 1], [1, 1, 1]])
 
-            intrinsics = np.array(
-                [[35, 0.0, rgb_image.shape[1] / 2],
-                [0.0, 35, rgb_image.shape[0] / 2],
-                [0.0, 0.0, 1.0]]
-            ) ## IT IS IN MILLIMETERS IN KUBRIC
+                # Following the convention in DynamicReplica_DyMask
+                R = camera_pose[:3, :3]
+                t = camera_pose[:3, 3]
+                camera_pose[:3, :3] = R.T
+                camera_pose[:3, 3] = -R.T @ t
 
-            # Depth cropping if needed
-            _, depthmap, _ = self._crop_resize_if_necessary(
-                rgb_image, depthmap, intrinsics, resolution, rng=rng, info=view_idx
-            )
+                intrinsics = cam["intrinsics"]
 
-            # Dynamic mask cropping if needed
-            rgb_image, dynamic_mask, intrinsics = self._crop_resize_if_necessary(
-                rgb_image, dynamic_mask_raw, intrinsics, resolution, rng=rng, info=view_idx
-            )
+                rgb_image, _, _ = self._crop_resize_if_necessary(
+                    rgb_image, depthmap, intrinsics, resolution, rng=rng, info=view_idx
+                )
 
-            dynamic_mask = dynamic_mask.astype(bool)
+                dynamic_mask_raw, depthmap, intrinsics = self._crop_resize_if_necessary(
+                    dynamic_mask_raw, depthmap, intrinsics, resolution, rng=rng, info=view_idx
+                )
+                np_dy = np.asarray(dynamic_mask_raw)
+                dynamic_mask = np_dy > 0 # Convert to binary mask
 
             # generate img mask and raymap mask
             img_mask, ray_mask = self.get_img_and_ray_masks(
                 self.is_metric, v, rng, p=[0.85, 0.10, 0.05]
             )
+
             if DEBUG:
                 # convert from PIL to numpy
                 np_rgb_image = np.asarray(rgb_image)
@@ -179,6 +167,7 @@ class Kubric_DyMask(BaseMultiViewDataset):
                 overlay[dynamic_mask] = [0, 0, 255]  # Mark dynamic regions in red
                 cv2.imwrite(f"/home/ramanathan/Methods/CUT3R/tmp/overlay_{v}.png", overlay[:, :, ::-1].astype(np.uint8))
 
+
             views.append(
                 dict(
                     img=rgb_image,
@@ -186,7 +175,7 @@ class Kubric_DyMask(BaseMultiViewDataset):
                     dynamic_mask=dynamic_mask.astype(np.float32),
                     camera_pose=camera_pose.astype(np.float32),
                     camera_intrinsics=intrinsics.astype(np.float32),
-                    dataset="kubric_dymask",
+                    dataset="HOI4D_DyMask",
                     label=self.scenes[scene_id] + "_" + basename,
                     instance=f"{str(idx)}_{str(view_idx)}",
                     is_metric=self.is_metric,
@@ -198,26 +187,10 @@ class Kubric_DyMask(BaseMultiViewDataset):
                     depth_only=False,
                     single_view=False,
                     reset=False,
-                    dynamic_mask_sparse=dynamic_mask.astype(np.float32),
-                    valid_mask_sparse=depthmap.astype(np.float32),
                 )
             )
         assert len(views) == num_views
         return views
-
-    def get_dynamic_mask(self, seg, obj_positions, t, threshold=1e-3):
-        dynamic_mask = np.zeros(seg.shape, dtype=bool)
-
-        for idx, pos in enumerate(obj_positions): # K-1, T, 3 0 is static background
-            # if obj is moving
-            if 0 <= t < pos.shape[0]:
-                disp_sum = np.linalg.norm(pos[t] - pos[min(t+1, pos.shape[0]-1)])
-                disp_sum += np.linalg.norm(pos[max(t-1, 0)] - pos[t])
-            else:
-                disp_sum = 0  # Default to zero if t is out of bounds
-            if disp_sum > threshold:
-                dynamic_mask |= (seg == idx+1)
-        return dynamic_mask.astype(np.int8)
 
 
 if __name__ == "__main__":
@@ -227,7 +200,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_location",
         type=str,
-        default='/mnt/rdata4_5/kubric_movi_f/',
+        default='/mnt/rdata4_5/HOI4D',
         help="path to dataset",
     )
     args = parser.parse_args()
@@ -242,12 +215,11 @@ if __name__ == "__main__":
     clip_step = 2
     quick = True  # Set to True for quick testing
 
-    dataset = Kubric_DyMask(
+    dataset = HOI4D_DyMask(
         ROOT=dataset_location,
         split=dset,
         num_views=N,
-        resolution=resolution,
-        seed = 50,
+        resolution=resolution
     )
 
     for idx in range(len(dataset)):
@@ -258,4 +230,3 @@ if __name__ == "__main__":
                 print(f"  {key}: {value.shape}, {value.dtype}")
             else:
                 print(f"  {key}: {type(value)}, {value}")
-            exit()

@@ -63,27 +63,47 @@ def process_image(args):
     Returns:
         None. Errors are printed to the console but do not stop the workflow.
     """
-    img_path, depth_path, out_img_path, out_depth_path, out_cam_path, intrinsics = args
+    img_path, depth_path, mask_path, objpose_path, out_img_path, out_depth_path, out_mask_path, out_cam_path, out_objpose_path, intrinsics, extrinsics = args
 
     try:
         # Load image
-        img = Image.open(img_path)
+        # img = Image.open(img_path)
 
-        # Load depth (in mm) and convert to meters
-        depth = cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH)
-        if depth is None:
-            raise ValueError(f"Could not read depth image: {depth_path}")
-        depth = depth.astype(np.float32) / 1000.0
+        # # Load depth (in mm) and convert to meters
+        # depth = cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH)
+        # if depth is None:
+        #     raise ValueError(f"Could not read depth image: {depth_path}")
+        # depth = depth.astype(np.float32) / 1000.0
 
-        # Rescale image and depth map
-        img_rescaled, depth_rescaled, intrinsics_rescaled = cropping.rescale_image_depthmap(
-            img, depth, intrinsics.copy(), (640, 480)
-        )
+        # # Rescale image and depth map
+        # img_rescaled, depth_rescaled, intrinsics_rescaled = cropping.rescale_image_depthmap(
+        #     img, depth, intrinsics.copy(), (640, 480)
+        # )
+        # # Rescale mask (if needed, otherwise just copy)
+        # if not os.path.exists(mask_path):
+        #     mask_path = mask_path.replace('mask', 'shift_mask')
+        
+        # if not os.path.exists(mask_path):
+        #     print(f"Warning: Mask not found for {img_path}. Skipping mask processing.")
+        #     mask = None
+        #     mask_rescaled = None
+        # else:
+        #     mask = Image.open(mask_path)
+        #     mask_rescaled, _, _ = cropping.rescale_image_depthmap(
+        #         mask, depth, intrinsics.copy(), (640, 480)
+        #     )
 
         # Save processed data
-        img_rescaled.save(out_img_path)      # PNG image
-        np.save(out_depth_path, depth_rescaled)  # Depth .npy
-        np.savez(out_cam_path, intrinsics=intrinsics_rescaled)
+        # img_rescaled.save(out_img_path)      # PNG image
+        # np.save(out_depth_path, depth_rescaled)  # Depth .npy
+        # if mask_rescaled is not None:
+        #     mask_rescaled.save(out_mask_path)    # PNG mask
+        if os.path.exists(objpose_path):
+            with open(objpose_path, 'r') as f:
+                objpose_data = f.read()
+            with open(out_objpose_path, 'w') as f:
+                f.write(objpose_data)  # Copy objpose JSON
+        # np.savez(out_cam_path, intrinsics=intrinsics_rescaled, extrinsics=extrinsics)
 
     except Exception as e:
         print(f"Error processing {img_path}: {e}")
@@ -122,39 +142,62 @@ def main():
         # Directories for this sequence
         rgb_dir = os.path.join(scene_dir, "align_rgb")
         depth_dir = os.path.join(scene_dir, "align_depth")
+        mask_dir = os.path.join(scene_dir, "2Dseg", "mask")
+        cam_extrinsics_dir = os.path.join(scene_dir, "3Dseg", "output.log")
+        objpose_dir = os.path.join(scene_dir, "objpose")
 
         # Output directories
         out_rgb_dir = os.path.join(out_dir, scene_name, "rgb")
         out_depth_dir = os.path.join(out_dir, scene_name, "depth")
+        out_mask_dir = os.path.join(out_dir, scene_name, "mask")
         out_cam_dir = os.path.join(out_dir, scene_name, "cam")
+        out_objpose_dir = os.path.join(out_dir, scene_name, "objpose")
         os.makedirs(out_rgb_dir, exist_ok=True)
         os.makedirs(out_depth_dir, exist_ok=True)
+        os.makedirs(out_mask_dir, exist_ok=True)
         os.makedirs(out_cam_dir, exist_ok=True)
+        os.makedirs(out_objpose_dir, exist_ok=True)
 
         # Find all image paths
         img_paths = sorted(glob.glob(os.path.join(rgb_dir, "*.jpg")))
+        with open(cam_extrinsics_dir, 'r') as f:# split into lines and parse as needed
+            extrinsics_lines = f.readlines()
+
 
         # Build tasks for each image
-        for img_path in img_paths:
+        for idx, img_path in enumerate(img_paths):
             basename = os.path.splitext(os.path.basename(img_path))[0]
             depth_path = os.path.join(depth_dir, f"{basename}.png")
+            mask_path = os.path.join(mask_dir, f"{basename}.png")
+            objpose_path = os.path.join(objpose_dir, f"{idx}.json")
 
             out_img_path = os.path.join(out_rgb_dir, f"{basename}.png")
             out_depth_path = os.path.join(out_depth_dir, f"{basename}.npy")
+            out_mask_path = os.path.join(out_mask_dir, f"{basename}.png")
             out_cam_path = os.path.join(out_cam_dir, f"{basename}.npz")
+            out_objpose_path = os.path.join(out_objpose_dir, f"{basename}.json")
+
+            # Process camera extrinsics 
+            extrinsics_idx = extrinsics_lines[(idx*5+1):(idx+1)*5]
+            cam_extrinsics = np.array([list(map(float, line.strip().split())) for line in extrinsics_idx])
 
             # Skip if already processed
-            if (os.path.exists(out_img_path) and os.path.exists(out_depth_path) and
-                    os.path.exists(out_cam_path)):
-                continue
+            # if (os.path.exists(out_img_path) and os.path.exists(out_depth_path) and
+            #         os.path.exists(out_mask_path) and os.path.exists(out_cam_path) and os.path.exists(out_objpose_path)):
+            #     continue
 
             task = (
                 img_path,
                 depth_path,
+                mask_path,
+                objpose_path,
                 out_img_path,
                 out_depth_path,
+                out_mask_path,
                 out_cam_path,
-                intrinsics
+                out_objpose_path,
+                intrinsics,
+                cam_extrinsics,
             )
             tasks.append(task)
 

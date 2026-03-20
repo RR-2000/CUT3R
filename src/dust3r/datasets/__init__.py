@@ -39,6 +39,7 @@ from .stereo4d import Stereo4D_Multiview
 from .spring_dymask import Spring_DyMask
 from .kubric_dymask import Kubric_DyMask
 from .dynamic_replica_dymask import DynamicReplica_DyMask
+from .hoi4d_dymask import HOI4D_DyMask
 
 
 from accelerate import Accelerator
