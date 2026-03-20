@@ -37,6 +37,8 @@ from dust3r.blocks import (
     DropPath,
     CustomDecoderBlock,
 )  # noqa
+from ultralytics import YOLO
+from torchvision.models.optical_flow import raft_small, Raft_Small_Weights
 
 inf = float("inf")
 from accelerate.logging import get_logger
@@ -91,6 +93,16 @@ def load_model(model_path, device, verbose=True):
         print(s)
     return net.to(device)
 
+def patchify(x, patch_size):
+    patch_x, patch_y = patch_size
+    B, C, H, W = x.shape
+    assert H % patch_x == 0 and W % patch_y == 0, "Image dimensions must be divisible by patch size"
+    x = x.view(B, C, H // patch_x, patch_x, W // patch_y, patch_y)
+    x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+    return x.view(B, -1, patch_x * patch_y * C) # Shape: (B, num_patches, patch_size*patch_size*C)
+
+def yolo_process_output(yolo_output, patch_size, img_size):
+    pass
 
 class ARCroco3DStereoConfig(PretrainedConfig):
     model_type = "arcroco_3d_stereo"
@@ -115,6 +127,8 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         pose_conf_head=False,
         pose_head=False,
         dymask_head=False,
+        RAFT=False,
+        YOLO=False,
         **croco_kwargs,
     ):
         super().__init__()
@@ -137,6 +151,8 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         self.pose_head = pose_head
         self.croco_kwargs = croco_kwargs
         self.dymask_head = dymask_head
+        self.RAFT = RAFT
+        self.YOLO = YOLO
 
 
 class LocalMemory(nn.Module):
@@ -253,6 +269,9 @@ class ARCroco3DStereo(CroCoNet):
                 for _ in range(config.ray_enc_depth)
             ]
         )
+        # TODO: make this more elegant by adding this to the config and croco_args
+        self.RAFT = True
+        self.YOLO = False
         self.enc_norm_ray_map = nn.LayerNorm(self.enc_embed_dim, eps=1e-6)
         self.dec_num_heads = self.croco_args["dec_num_heads"]
         self.pose_head_flag = config.pose_head
@@ -289,6 +308,14 @@ class ARCroco3DStereo(CroCoNet):
             self.croco_args.get("norm_layer", None),
             self.croco_args.get("norm_im2_in_dec", None),
         )
+        self._set_attention_maskers(self.dec_embed_dim)
+
+        if self.YOLO:
+            self.yolo = YOLO('yolo26m-seg.pt')
+
+        if self.RAFT:
+            self.raft = raft_small(pretrained=True, progress=False).eval()
+        
         self.set_downstream_head(
             config.output_mode,
             config.head_type,
@@ -326,6 +353,71 @@ class ARCroco3DStereo(CroCoNet):
         self.patch_embed_ray_map = get_patch_embed(
             self.patch_embed_cls, img_size, patch_size, enc_embed_dim, in_chans=6
         )
+
+    def _set_attention_maskers(
+        self,
+        dec_embed_dim=768,
+        mlp_ratio=4.0,
+    ):  
+        p_size = self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]
+        in_features = int(dec_embed_dim + self.RAFT*(p_size*2) + self.YOLO*(p_size*1))
+        hidden_features = int(in_features * mlp_ratio)
+        out_features = dec_embed_dim
+
+        self.attention_masker_img_q = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
+        self.attention_masker_img_k = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
+        self.attention_masker_state_img_q = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
+        self.attention_masker_state_img_k = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
+        self.attention_masker_img_state_q = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
+        self.attention_masker_img_state_k = Mlp(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            act_layer=nn.GELU,
+            bias=True,
+            drop=0.0,
+        )
+
 
     def _set_decoder(
         self,
@@ -500,6 +592,31 @@ class ARCroco3DStereo(CroCoNet):
                 self.downstream_head.dpt_cross,
                 self.downstream_head.dpt_rgb,
                 self.downstream_head.pose_head,
+            ],
+            "keep_mask": [
+                self.patch_embed,
+                self.patch_embed_ray_map,
+                self.masked_img_token,
+                self.masked_ray_map_token,
+                self.enc_blocks,
+                self.enc_blocks_ray_map,
+                self.enc_norm,
+                self.enc_norm_ray_map,
+                self.dec_blocks,
+                self.dec_blocks_state,
+                self.pose_retriever,
+                self.pose_token,
+                self.register_tokens,
+                self.decoder_embed_state,
+                self.decoder_embed,
+                self.dec_norm,
+                self.dec_norm_state,
+                self.downstream_head.dpt_self,
+                self.downstream_head.final_transform,
+                self.downstream_head.dpt_cross,
+                self.downstream_head.dpt_rgb,
+                self.downstream_head.pose_head,
+                self.raft,
             ],
         }
         freeze_all_params(to_be_frozen[freeze])
@@ -690,7 +807,16 @@ class ARCroco3DStereo(CroCoNet):
             full_pos.chunk(len(views), dim=0),
         )
 
-    def _decoder(self, f_state, pos_state, f_img, pos_img, f_pose, pos_pose):
+    def _decoder(self, f_state, pos_state, f_img, pos_img, f_pose, pos_pose, attention_mask=None, raft_flow=None, yolo_output=None):
+
+        f_extra = None
+        if yolo_output is not None and raft_flow is not None:
+            f_extra = torch.cat([raft_flow, yolo_output], dim=1)
+        elif yolo_output is not None and raft_flow is None:
+            f_extra = yolo_output
+        elif yolo_output is None and raft_flow is not None:
+            f_extra = raft_flow
+        print(f'f_extra is None: {f_extra == None}')
         final_output = [(f_state, f_img)]  # before projection
         assert f_state.shape[-1] == self.dec_embed_dim
         f_img = self.decoder_embed(f_img)
@@ -699,17 +825,26 @@ class ARCroco3DStereo(CroCoNet):
             f_img = torch.cat([f_pose, f_img], dim=1)
             pos_img = torch.cat([pos_pose, pos_img], dim=1)
         final_output.append((f_state, f_img))
-        for blk_state, blk_img in zip(self.dec_blocks_state, self.dec_blocks):
-            if (
+        for idx, item in enumerate(zip(self.dec_blocks_state, self.dec_blocks)):
+            blk_state, blk_img = item
+            use_ckpt = (
                 self.gradient_checkpointing
                 and self.training
                 and torch.is_grad_enabled()
-            ):
+                and (f_state.requires_grad or f_img.requires_grad)
+            )
+            if use_ckpt:
                 f_state, _ = checkpoint(
                     blk_state,
                     *final_output[-1][::+1],
                     pos_state,
                     pos_img,
+                    None, # attention_mask
+                    None, # cross_attention_mask
+                    None, # q_masker
+                    None, # k_masker
+                    None, # q_masker_cross
+                    (f_extra, self.attention_masker_img_state_k), # k_masker_cross
                     use_reentrant=not self.fixed_input_length,
                 )
                 f_img, _ = checkpoint(
@@ -717,11 +852,21 @@ class ARCroco3DStereo(CroCoNet):
                     *final_output[-1][::-1],
                     pos_img,
                     pos_state,
+                    None, # attention_mask
+                    None, # cross_attention_mask
+                    (f_extra, self.attention_masker_img_q), # q_masker
+                    (f_extra, self.attention_masker_img_k), # k_masker
+                    (f_extra, self.attention_masker_state_img_q), # q_masker_cross
+                    None, # k_masker_cross
                     use_reentrant=not self.fixed_input_length,
                 )
             else:
-                f_state, _ = blk_state(*final_output[-1][::+1], pos_state, pos_img)
-                f_img, _ = blk_img(*final_output[-1][::-1], pos_img, pos_state)
+                f_state, _ = blk_state(*final_output[-1][::+1], pos_state, pos_img,
+                                                                k_masker_cross= (f_extra, self.attention_masker_img_state_k),)
+                f_img, _ = blk_img(*final_output[-1][::-1], pos_img, pos_state, attention_mask=attention_mask if idx < 13 else None,
+                                                                q_masker= (f_extra, self.attention_masker_img_q),
+                                                                k_masker= (f_extra, self.attention_masker_img_k),
+                                                                q_masker_cross= (f_extra, self.attention_masker_state_img_q),)
             final_output.append((f_state, f_img))
         del final_output[1]  # duplicate with final_output[0]
         final_output[-1] = (
@@ -755,9 +900,12 @@ class ARCroco3DStereo(CroCoNet):
         img_mask=None,
         reset_mask=None,
         update=None,
+        attention_mask=None,
+        raft_flow=None,
+        yolo_output=None,
     ):
         new_state_feat, dec = self._decoder(
-            state_feat, state_pos, current_feat, current_pos, pose_feat, pose_pos
+            state_feat, state_pos, current_feat, current_pos, pose_feat, pose_pos, attention_mask=attention_mask, raft_flow=raft_flow, yolo_output=yolo_output
         )
         new_state_feat = new_state_feat[-1]
         return new_state_feat, dec
@@ -792,7 +940,24 @@ class ARCroco3DStereo(CroCoNet):
         state_feat,
         state_pos,
         mem,
-    ):
+    ):  
+        raft_flow = None
+        if self.RAFT and i > 0:
+            prev_img = views[i-1]["img"]
+            curr_img = views[i]["img"]
+            raft_flow = self.raft(prev_img, curr_img)  # Shape: N*(B, 2, H, W)
+            raft_flow = raft_flow[-1]  # Shape: (B, 2, H, W)
+            raft_flow = F.interpolate(raft_flow, size=views[i-1]["img"].shape[2:4], mode='bilinear', align_corners=False)
+            raft_flow = patchify(raft_flow, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*2)
+
+        yolo_output = None
+        if self.YOLO and i > 0:
+            yolo_input = views[i]["img"]  # Shape: (B, C, H, W)
+            yolo_output = self.yolo(yolo_input)  # Shape: (B, 1, H, W)
+            yolo_output = torch.cat([out.mask.unsqueeze(0) for out in yolo_output], dim=0)  # Shape: (B, 1, H, W)
+            yolo_output = F.interpolate(yolo_output, size=views[i]["img"].shape[2:4], mode='bilinear', align_corners=False)
+            yolo_output = patchify(yolo_output, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*1)
+            
         if self.pose_head_flag:
             global_img_feat_i = self._get_img_level_feat(feat_i)
             if i == 0:
@@ -816,6 +981,9 @@ class ARCroco3DStereo(CroCoNet):
             img_mask=views[i]["img_mask"],
             reset_mask=views[i]["reset"],
             update=views[i].get("update", None),
+            attention_mask=views[i].get("attention_mask", None),
+            raft_flow=raft_flow,
+            yolo_output=yolo_output,
         )
         out_pose_feat_i = dec[-1][:, 0:1]
         new_mem = self.pose_retriever.update_mem(
@@ -858,6 +1026,24 @@ class ARCroco3DStereo(CroCoNet):
         for i in range(len(views)):
             feat_i = feat[i]
             pos_i = pos[i]
+
+            raft_flow = None
+            if self.RAFT and i > 0:
+                prev_img = views[i-1]["img"]
+                curr_img = views[i]["img"]
+                raft_flow = self.raft(prev_img, curr_img)  # Shape: N*(B, 2, H, W)
+                raft_flow = raft_flow[-1]  # Shape: (B, 2, H, W)
+                raft_flow = F.interpolate(raft_flow, size=views[i-1]["img"].shape[2:4], mode='bilinear', align_corners=False)
+                raft_flow = patchify(raft_flow, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*2)
+
+            yolo_output = None
+            if self.YOLO and i > 0:
+                yolo_input = views[i]["img"]  # Shape: (B, C, H, W)
+                yolo_output = self.yolo(yolo_input)  # Shape: (B, 1, H, W)
+                yolo_output = torch.cat([out.mask.unsqueeze(0) for out in yolo_output], dim=0)  # Shape: (B, 1, H, W)
+                yolo_output = F.interpolate(yolo_output, size=views[i]["img"].shape[2:4], mode='bilinear', align_corners=False)
+                yolo_output = patchify(yolo_output, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*1)
+
             if self.pose_head_flag:
                 global_img_feat_i = self._get_img_level_feat(feat_i)
                 if i == 0:
@@ -881,6 +1067,9 @@ class ARCroco3DStereo(CroCoNet):
                 img_mask=views[i]["img_mask"],
                 reset_mask=views[i]["reset"],
                 update=views[i].get("update", None),
+                attention_mask=views[i].get("attention_mask", None),
+                raft_flow=raft_flow,
+                yolo_output=yolo_output,
             )
             out_pose_feat_i = dec[-1][:, 0:1]
             new_mem = self.pose_retriever.update_mem(

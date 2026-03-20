@@ -56,3 +56,5 @@ src/checkpoints
 src/eval_*
 pbs_logs
 sample*/
+eval_results/*
+tmp/*
