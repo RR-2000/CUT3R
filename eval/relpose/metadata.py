@@ -136,7 +136,7 @@ dataset_metadata = {
     "sintel": {
         "img_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/final",
         "anno_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/camdata_left",
-        "mask_path": None,
+        "mask_path": "/mnt/rdata4_3/segAnyMo_Sintel/sam2/final_res",
         "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(anno_path, seq),
         "traj_format": None,
@@ -157,7 +157,7 @@ dataset_metadata = {
             "temple_3",
         ],
         "full_seq": False,
-        "mask_path_seq_func": lambda mask_path, seq: None,
+        "mask_path_seq_func": lambda mask_path, seq: os.path.join(mask_path, seq, 'frames_1024x436'),
         "skip_condition": None,
         "process_func": lambda args, img_path: process_sintel(args, img_path),
     },

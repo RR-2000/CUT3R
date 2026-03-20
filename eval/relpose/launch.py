@@ -117,6 +117,10 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
         for seq in tqdm(seqs):
             try:
                 dir_path = metadata["dir_path_func"](img_path, seq)
+                mask_path = None
+                if metadata['mask_path'] is not None:
+                    mask_path = metadata['mask_path_seq_func'](metadata['mask_path'], seq)
+                
 
                 # Handle skip_condition
                 skip_condition = metadata.get("skip_condition", None)
@@ -126,13 +130,20 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
                 mask_path_seq_func = metadata.get(
                     "mask_path_seq_func", lambda mask_path, seq: None
                 )
-                mask_path_seq = mask_path_seq_func(mask_path, seq)
 
                 filelist = [
                     os.path.join(dir_path, name) for name in os.listdir(dir_path)
                 ]
                 filelist.sort()
                 filelist = filelist[:: args.pose_eval_stride]
+
+                mask_filelist = None
+                if mask_path is not None:
+                    mask_filelist = [
+                        os.path.join(mask_path, name) for name in os.listdir(mask_path)
+                    ]
+                    mask_filelist.sort()
+                    mask_filelist = mask_filelist[:: args.pose_eval_stride]
 
                 views = prepare_input(
                     filelist,
@@ -141,6 +152,7 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
                     crop=not args.no_crop,
                     revisit=args.revisit,
                     update=not args.freeze_state,
+                    mask_filelist=mask_filelist,
                 )
                 outputs, _ = inference(views, model, device)
 
@@ -294,9 +306,56 @@ if __name__ == "__main__":
         revisit=1,
         update=True,
         crop=True,
+        mask_filelist=None,
     ):
         images = load_images(img_paths, size=size, crop=crop)
+        masks = None
+        if mask_filelist is not None:
+            masks = load_images(mask_filelist, size=size, crop=crop)
+
+        # Mask prep
+        if masks is not None:
+            # make patches to conform with the ViT encoder input
+            patch_size = 16  # Assuming a patch size of 16, adjust if needed
+            masks = [
+                mask["img"].float() for mask in masks
+            ]  # Convert to tensors and add channel dimension
+            print(f"Loaded {len(masks)} masks with shape {masks[0].shape} and dtype {masks[0].dtype}")
+            masks = [
+                torch.nn.functional.unfold(mask, kernel_size=patch_size, stride=patch_size)
+                for mask in masks
+            ]  # Unfold into patches
+            print(f"Unfolded masks into patches with shape {masks[0].shape}")
+            masks = [
+                mask.transpose(1, 2) for mask in masks
+            ]  # Transpose to (num_patches, channels * patch_size * patch_size)
+            print(f"Transposed masks to shape {masks[0].shape}")
+            masks = [
+                (1-(1.0*(mask>0)).mean(dim=-1)) for mask in masks
+            ]  # Convert to binary mask based on majority (1, num_patches)
+            print(f"Converted masks to binary with shape {masks[0].shape} and dtype {masks[0].dtype}")
+
+            
+            for i in range(len(masks)):
+                mask = masks[i]
+                mask_copy = torch.ones((mask.shape[1]+1, mask.shape[1]+1), dtype=torch.bool)
+                mask_copy[1:, 1:] = mask
+                masks[i] = mask_copy  # Shape (num_patches, num_patches)
+            
+            print(f"Final masks shape: {masks[0].shape} and dtype {masks[0].dtype}")
+            # masks = [
+            #     mask.transpose(1, 2) for mask in masks
+            # ]  # Transpose to (K, Q)
+
+            
+            # # Duplicate to N*N attention mask by padding ones
+            # masks = [
+            #     mask.unsqueeze(1).repeat(1, mask.shape[0], 1) for mask in masks
+            # ]  # Shape (num_patches, num_patches)
+        
         views = []
+
+        
         if raymaps is None and raymap_mask is None:
             num_views = len(images)
 
@@ -322,6 +381,7 @@ if __name__ == "__main__":
                     "ray_mask": torch.tensor(False).unsqueeze(0),
                     "update": torch.tensor(True).unsqueeze(0),
                     "reset": torch.tensor(False).unsqueeze(0),
+                    "attention_mask": masks[i].unsqueeze(0) if masks is not None else None,
                 }
                 views.append(view)
         else:
@@ -358,6 +418,7 @@ if __name__ == "__main__":
                     "ray_mask": torch.tensor(raymap_mask[i]).unsqueeze(0),
                     "update": torch.tensor(img_mask[i]).unsqueeze(0),
                     "reset": torch.tensor(False).unsqueeze(0),
+                    "mask": masks[i] if masks is not None else None,
                 }
                 if img_mask[i]:
                     j += 1
