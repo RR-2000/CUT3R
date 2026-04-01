@@ -11,6 +11,7 @@ from itertools import repeat
 import collections.abc
 from torch.nn.functional import scaled_dot_product_attention
 from functools import partial
+import torch.nn.functional as F
 
 
 def _ntuple(n):
@@ -116,36 +117,28 @@ class Attention(nn.Module):
         )
         q, k, v = [qkv[:, :, i] for i in range(3)]
 
-        def build_masker_input(flat, extra_input, mlp):
+        def build_masker_input(flat, extra_input, cam_input, mlp):
             in_features = mlp.fc1.in_features
             extra_dim = in_features - C
             if extra_dim <= 0:
                 return flat
             if extra_input is None:
-                extra = flat.new_zeros(B, N, extra_dim)
+                extra_input = flat.new_zeros(B, N-1, extra_dim)
             else:
                 extra_input = extra_input.reshape(B, N-1, extra_dim)
-                prev_extra = flat.new_zeros(B, 1, extra_dim)
-                extra = torch.cat([prev_extra, extra_input], dim=1)
-            return torch.cat([flat, extra], dim=-1)
+            extra = torch.cat([prev_extra, extra_input], dim=1)
+            return torch.cat([cam_input, flat, extra], dim=-1)
 
-        if q_masker is not None:
+
+        if q_masker is not None and mask is None:
             q_input, q_mlp = q_masker
             q_flat = q.transpose(1, 2).reshape(B, N, C)
-            q_input = build_masker_input(q_flat, q_input, q_mlp)
+            q_input = build_masker_input(q_flat[:, 1:], q_input, q_flat[:, [0], :], q_mlp)
             self.prev_q_cam = q_flat[:, [0], :]
-            q = q_mlp(q_input).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
-        else:
-            self.prev_q_cam = q[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
-
-        if k_masker is not None:
-            k_input, k_mlp = k_masker
-            k_flat = k.transpose(1, 2).reshape(B, N, C)
-            k_input = build_masker_input(k_flat, k_input, k_mlp)
-            self.prev_k_cam = k_flat[:, [0], :]
-            k = k_mlp(k_input).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
-        else:
-            self.prev_k_cam = k[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
+            q_mask = q_mlp(q_input)
+            # Make Attention mask from q_mask only masking the B, 0, C token's Q
+            mask = torch.zeros(B, N, N, device=x.device)
+            mask[:, 0, 1:] = q_mask.squeeze(1)
 
         q_type = q.dtype
         k_type = k.dtype
@@ -272,25 +265,6 @@ class CrossAttention(nn.Module):
                 prev_extra = flat.new_zeros(B, 1, extra_dim)
                 extra = torch.cat([prev_extra, extra_input], dim=1)
             return torch.cat([flat, extra], dim=-1)
-
-        if q_masker is not None:
-            q_input, q_mlp = q_masker
-            q_flat = q.transpose(1, 2).reshape(B, Nq, C)
-            q_input = build_masker_input(q_flat, q_input, q_mlp, Nq)
-            self.prev_q_cam = q_flat[:,[0],:].detach()
-            q = q_mlp(q_input).reshape(B, Nq, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-        else:
-            self.prev_q_cam = q[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
-        
-        if k_masker is not None:
-            k_input, k_mlp = k_masker
-            k_flat = k.transpose(1, 2).reshape(B, Nk, C)
-            k_input = build_masker_input(k_flat, k_input, k_mlp, Nk)
-            self.prev_k_cam = k_flat[:,[0],:].detach()
-            k = k_mlp(k_input).reshape(B, Nk, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-        else:
-            self.prev_k_cam = k[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
-
 
         q_type = q.dtype
         k_type = k.dtype

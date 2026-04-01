@@ -360,56 +360,11 @@ class ARCroco3DStereo(CroCoNet):
         mlp_ratio=4.0,
     ):  
         p_size = self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]
-        in_features = int(dec_embed_dim + self.RAFT*(p_size*2) + self.YOLO*(p_size*1))
+        in_features = int(2*dec_embed_dim + self.RAFT*(p_size*2) + self.YOLO*(p_size*1))
         hidden_features = int(in_features * mlp_ratio)
-        out_features = dec_embed_dim
+        out_features = 1
 
-        self.attention_masker_img_q = Mlp(
-            in_features=in_features,
-            hidden_features=hidden_features,
-            out_features=out_features,
-            act_layer=nn.GELU,
-            bias=True,
-            drop=0.0,
-        )
-
-        self.attention_masker_img_k = Mlp(
-            in_features=in_features,
-            hidden_features=hidden_features,
-            out_features=out_features,
-            act_layer=nn.GELU,
-            bias=True,
-            drop=0.0,
-        )
-
-        self.attention_masker_state_img_q = Mlp(
-            in_features=in_features,
-            hidden_features=hidden_features,
-            out_features=out_features,
-            act_layer=nn.GELU,
-            bias=True,
-            drop=0.0,
-        )
-
-        self.attention_masker_state_img_k = Mlp(
-            in_features=in_features,
-            hidden_features=hidden_features,
-            out_features=out_features,
-            act_layer=nn.GELU,
-            bias=True,
-            drop=0.0,
-        )
-
-        self.attention_masker_img_state_q = Mlp(
-            in_features=in_features,
-            hidden_features=hidden_features,
-            out_features=out_features,
-            act_layer=nn.GELU,
-            bias=True,
-            drop=0.0,
-        )
-
-        self.attention_masker_img_state_k = Mlp(
+        self.attention_masker_cam = Mlp(
             in_features=in_features,
             hidden_features=hidden_features,
             out_features=out_features,
@@ -816,6 +771,7 @@ class ARCroco3DStereo(CroCoNet):
             f_extra = yolo_output
         elif yolo_output is None and raft_flow is not None:
             f_extra = raft_flow
+        
         print(f'f_extra is None: {f_extra == None}')
         final_output = [(f_state, f_img)]  # before projection
         assert f_state.shape[-1] == self.dec_embed_dim
@@ -844,7 +800,7 @@ class ARCroco3DStereo(CroCoNet):
                     None, # q_masker
                     None, # k_masker
                     None, # q_masker_cross
-                    (f_extra, self.attention_masker_img_state_k), # k_masker_cross
+                    None, # k_masker_cross
                     use_reentrant=not self.fixed_input_length,
                 )
                 f_img, _ = checkpoint(
@@ -854,19 +810,18 @@ class ARCroco3DStereo(CroCoNet):
                     pos_state,
                     None, # attention_mask
                     None, # cross_attention_mask
-                    (f_extra, self.attention_masker_img_q), # q_masker
-                    (f_extra, self.attention_masker_img_k), # k_masker
-                    (f_extra, self.attention_masker_state_img_q), # q_masker_cross
+                    None, # q_masker
+                    self.attention_masker_cam if f_extra is not None else None, # k_masker
+                    None, # q_masker_cross
                     None, # k_masker_cross
                     use_reentrant=not self.fixed_input_length,
                 )
             else:
-                f_state, _ = blk_state(*final_output[-1][::+1], pos_state, pos_img,
-                                                                k_masker_cross= (f_extra, self.attention_masker_img_state_k),)
-                f_img, _ = blk_img(*final_output[-1][::-1], pos_img, pos_state, attention_mask=attention_mask if idx < 13 else None,
-                                                                q_masker= (f_extra, self.attention_masker_img_q),
-                                                                k_masker= (f_extra, self.attention_masker_img_k),
-                                                                q_masker_cross= (f_extra, self.attention_masker_state_img_q),)
+                f_state, _ = blk_state(*final_output[-1][::+1], pos_state, pos_img)
+
+                f_img, _ = blk_img(*final_output[-1][::-1], pos_img, pos_state,
+                                                                k_masker= self.attention_masker_cam if f_extra is not None else None,
+                                                                )
             final_output.append((f_state, f_img))
         del final_output[1]  # duplicate with final_output[0]
         final_output[-1] = (
