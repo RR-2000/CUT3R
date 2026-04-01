@@ -1,19 +1,19 @@
 #!/bin/bash
-#PBS -N attn_mask_CUT3R_deep
-#PBS -l select=1:ncpus=32:ngpus=3:mem=256gb:host=cvml04
+#PBS -N rdata4_5_HOI4D_clearing
+#PBS -l select=1:ncpus=32:ngpus=0:mem=64gb:host=cvml02
 
 # Activate the Conda environment
-# source /apps/miniconda3/etc/profile.d/conda.sh
-source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+source /apps/miniconda3/etc/profile.d/conda.sh
+# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 conda activate cut3r
 
 cd /home/ramanathan/Methods/CUT3R/src
 
-# Define tag for log and save path
+export PYTHONPATH=/home/ramanathan/Methods/CUT3R:$PYTHONPATH
 
-#CUDA_LAUNCH_BLOCKING=1 NCCL_DEBUG=TRACE 
-TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py  --config-name dymask_20views_DPT_mask_individual
+rm -rf /mnt/rdata4_5/HOI4D
 
+# python /home/ramanathan/Methods/CUT3R/datasets_preprocess/preprocess_hoi4d.py --root_dir /mnt/rdata4_3/dymask_datasets/HOI4D/HOI4D_release --cam_root /mnt/rdata4_3/dymask_datasets/HOI4D/camera_params --out_dir /mnt/rdata4_5/HOI4D --max_workers 20
 
 # # alias pn='pbsnodes -aSj'
 
@@ -75,5 +75,3 @@ TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu 
 
  
 # OPENBLAS_NUM_THREADS=1 CUDA_VISIBLE_DEVICES=3 python demo.py --input demo_data/dog-gooses --output_dir demo_tmp --seq_name dog-gooses --weights checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth 
-
-# ps -eo pid,user,pcpu,pmem,comm --sort=-pcpu | grep ramanat
