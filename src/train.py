@@ -131,6 +131,21 @@ def train(args):
     # auto resume
     if not args.resume:
         last_ckpt_fname = os.path.join(args.output_dir, f"checkpoint-last.pth")
+        if not os.path.isfile(last_ckpt_fname):
+            printer.info(f"No checkpoint found at {last_ckpt_fname}, looking for largest epoch checkpoint...")
+            last_epoch_ckpt = None
+            for fname in os.listdir(args.output_dir):
+                if fname.startswith("checkpoint-") and fname.endswith(".pth"):
+                    epoch_str = fname[len("checkpoint-") : -len(".pth")]
+                    if epoch_str.isdigit():
+                        epoch_num = int(epoch_str)
+                        if last_epoch_ckpt is None or epoch_num > last_epoch_ckpt[0]:
+                            last_epoch_ckpt = (epoch_num, fname)
+            if last_epoch_ckpt is not None:
+                last_ckpt_fname = os.path.join(args.output_dir, last_epoch_ckpt[1])
+                printer.info(f"Found checkpoint {last_ckpt_fname} from epoch {last_epoch_ckpt[0]}")
+            else:
+                printer.info(f"No epoch checkpoint found in {args.output_dir}")
         args.resume = last_ckpt_fname if os.path.isfile(last_ckpt_fname) else None
 
     printer.info("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
