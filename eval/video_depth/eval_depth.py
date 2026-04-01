@@ -62,6 +62,7 @@ def main(args):
             f"{args.output_dir}/*/frame_*.npy"
         )  # TODO: update the path to your prediction
         pred_pathes = sorted(pred_pathes)
+        depth_path = dataset_metadata[args.eval_dataset]["depth_path"]
 
         if len(pred_pathes) > 643:
             full = True
@@ -69,7 +70,7 @@ def main(args):
             full = False
 
         if full:
-            depth_pathes = glob.glob(f"data/sintel/training/depth/*/*.dpt")
+            depth_pathes = glob.glob(f"{depth_path}/*/*.dpt")
             depth_pathes = sorted(depth_pathes)
         else:
             seq_list = [
@@ -89,7 +90,7 @@ def main(args):
                 "temple_3",
             ]
             depth_pathes_folder = [
-                f"data/sintel/training/depth/{seq}" for seq in seq_list
+                f"{depth_path}/{seq}" for seq in seq_list
             ]
             depth_pathes = []
             for depth_pathes_folder_i in depth_pathes_folder:
@@ -185,9 +186,9 @@ def main(args):
             return depth
 
         seq_list = ["balloon2", "crowd2", "crowd3", "person_tracking2", "synchronous"]
-
+        img_path = dataset_metadata[args.eval_dataset]["img_path"]
         img_pathes_folder = [
-            f"data/bonn/rgbd_bonn_dataset/rgbd_bonn_{seq}/rgb_110/*.png"
+            f"{dataset_metadata[args.eval_dataset]['dir_path_func'](img_path, seq)}/*.png"
             for seq in seq_list
         ]
         img_pathes = []
@@ -195,7 +196,7 @@ def main(args):
             img_pathes += glob.glob(img_pathes_folder_i)
         img_pathes = sorted(img_pathes)
         depth_pathes_folder = [
-            f"data/bonn/rgbd_bonn_dataset/rgbd_bonn_{seq}/depth_110/*.png"
+            f"{dataset_metadata[args.eval_dataset]['depth_path_func'](img_path, None, seq)}/*.png"
             for seq in seq_list
         ]
         depth_pathes = []

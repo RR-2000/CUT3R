@@ -29,13 +29,16 @@ dataset_metadata = {
         "process_func": lambda args, img_path: process_kitti(args, img_path),
     },
     "bonn": {
-        "img_path": "data/bonn/rgbd_bonn_dataset",
+        "img_path": "/mnt/rdata4_3/dymask_datasets/bonn",
         "mask_path": None,
         "dir_path_func": lambda img_path, seq: os.path.join(
             img_path, f"rgbd_bonn_{seq}", "rgb_110"
         ),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(
             img_path, f"rgbd_bonn_{seq}", "groundtruth_110.txt"
+        ),
+        "depth_path_func": lambda img_path, anno_path, seq: os.path.join(
+            img_path, f"rgbd_bonn_{seq}", "depth_110"
         ),
         "traj_format": "tum",
         "seq_list": ["balloon2", "crowd2", "crowd3", "person_tracking2", "synchronous"],
@@ -78,8 +81,9 @@ dataset_metadata = {
         "process_func": None,
     },
     "sintel": {
-        "img_path": "data/sintel/training/final",
-        "anno_path": "data/sintel/training/camdata_left",
+        "img_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/final",
+        "depth_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/depth",
+        "anno_path": "/mnt/rdata4_3/dymask_datasets/sintel/training/camdata_left",
         "mask_path": None,
         "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq),
         "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(anno_path, seq),
