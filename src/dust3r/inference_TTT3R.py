@@ -82,6 +82,19 @@ def loss_of_one_batch(
 
         with torch.cuda.amp.autocast(enabled=False):
             loss = criterion(batch, preds) if criterion is not None else None
+            unwrap = accelerator.unwrap_model(model) if accelerator is not None else model
+            masker_loss = (
+                unwrap.get_masker_loss() if hasattr(unwrap, "get_masker_loss") else None
+            )
+            if masker_loss is not None:
+                if loss is None:
+                    loss = (masker_loss, {"masker_loss": float(masker_loss)})
+                else:
+                    loss_value, loss_details = loss
+                    loss_value = loss_value + masker_loss
+                    loss_details = dict(loss_details)
+                    loss_details["masker_loss"] = float(masker_loss)
+                    loss = (loss_value, loss_details)
 
     result = dict(views=batch, pred=preds, loss=loss)
     return result[ret] if ret else result
@@ -159,8 +172,18 @@ def loss_of_one_batch_tbptt(
                     loss, loss_details = (
                         criterion(chunk, preds, camera1=batch[0]["camera_pose"])
                         if criterion is not None
+                        else (None, {})
+                    )
+                    unwrap = accelerator.unwrap_model(model) if accelerator is not None else model
+                    masker_loss = (
+                        unwrap.get_masker_loss()
+                        if hasattr(unwrap, "get_masker_loss")
                         else None
                     )
+                    if masker_loss is not None:
+                        loss = (loss if loss is not None else 0.0) + masker_loss
+                        loss_details = dict(loss_details)
+                        loss_details["masker_loss"] = float(masker_loss)
                     all_loss += float(loss)
                     all_loss_details = merge_chunk_dict(
                         all_loss_details, loss_details, chunk_id * chunk_size
@@ -192,8 +215,18 @@ def loss_of_one_batch_tbptt(
                     loss, loss_details = (
                         criterion(chunk, preds, camera1=batch[0]["camera_pose"])
                         if criterion is not None
+                        else (None, {})
+                    )
+                    unwrap = accelerator.unwrap_model(model) if accelerator is not None else model
+                    masker_loss = (
+                        unwrap.get_masker_loss()
+                        if hasattr(unwrap, "get_masker_loss")
                         else None
                     )
+                    if masker_loss is not None:
+                        loss = (loss if loss is not None else 0.0) + masker_loss
+                        loss_details = dict(loss_details)
+                        loss_details["masker_loss"] = float(masker_loss)
                     all_loss += float(loss)
                     all_loss_details = merge_chunk_dict(
                         all_loss_details, loss_details, chunk_id * chunk_size

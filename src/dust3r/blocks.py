@@ -10,6 +10,7 @@ import torch.nn as nn
 from itertools import repeat
 import collections.abc
 from torch.nn.functional import scaled_dot_product_attention
+from torch.nn import functional as F
 from functools import partial
 
 
@@ -21,6 +22,21 @@ def _ntuple(n):
 
     return parse
 
+def build_masker_input(flat, extra_input, mlp, N, C, B):
+    try:
+        in_features = mlp.in_features
+    except AttributeError:
+        in_features = 768 + 16*16*2 + 16*16*1 # Default to max possible input size if mlp doesn't have in_features attribute
+    extra_dim = in_features - C
+    if extra_dim <= 0:
+        return flat
+    if extra_input is None:
+        extra = flat.new_zeros(B, N, extra_dim)
+    else:
+        extra_input = extra_input.reshape(B, N-1, extra_dim)
+        prev_extra = flat.new_zeros(B, 1, extra_dim)
+        extra = torch.cat([prev_extra, extra_input], dim=1)
+    return torch.cat([flat, extra], dim=-1)
 
 to_2tuple = _ntuple(2)
 
@@ -65,6 +81,7 @@ class Mlp(nn.Module):
         hidden_features=None,
         out_features=None,
         act_layer=nn.GELU,
+        depth=1,
         bias=True,
         drop=0.0,
     ):
@@ -82,6 +99,42 @@ class Mlp(nn.Module):
 
     def forward(self, x):
         return self.drop2(self.fc2(self.drop1(self.act(self.fc1(x)))))
+
+class MlpMasker(nn.Module):
+
+    def __init__(
+        self,
+        in_features,
+        hidden_features=None,
+        depth=1,
+        out_features=None,
+        act_layer=nn.GELU,
+        bias=False,
+        drop=0.0,
+    ):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        bias = to_2tuple(bias)
+        drop_probs = to_2tuple(drop)
+
+        layers = []
+
+        assert depth >= 1, "Depth must be at least 1"
+        # Add the first layer separately to handle the input features
+        layers.append(nn.Linear(in_features, hidden_features, bias=bias[0]))
+        layers.append(act_layer())
+        layers.append(nn.Dropout(drop_probs[0]))
+        for i in range(depth-1):
+            layers.append(nn.Linear(hidden_features, hidden_features, bias=bias[0]))
+            layers.append(act_layer())
+            layers.append(nn.Dropout(drop_probs[0]))
+        layers.append(nn.Linear(hidden_features, out_features, bias=bias[1]))
+        layers.append(nn.Dropout(drop_probs[1]))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.mlp(x)
 
 
 class Attention(nn.Module):
@@ -116,34 +169,25 @@ class Attention(nn.Module):
         )
         q, k, v = [qkv[:, :, i] for i in range(3)]
 
-        def build_masker_input(flat, extra_input, mlp):
-            in_features = mlp.fc1.in_features
-            extra_dim = in_features - C
-            if extra_dim <= 0:
-                return flat
-            if extra_input is None:
-                extra = flat.new_zeros(B, N, extra_dim)
-            else:
-                extra_input = extra_input.reshape(B, N-1, extra_dim)
-                prev_extra = flat.new_zeros(B, 1, extra_dim)
-                extra = torch.cat([prev_extra, extra_input], dim=1)
-            return torch.cat([flat, extra], dim=-1)
-
         if q_masker is not None:
             q_input, q_mlp = q_masker
             q_flat = q.transpose(1, 2).reshape(B, N, C)
-            q_input = build_masker_input(q_flat, q_input, q_mlp)
+            # print(f"Q Input is None: {q_input is None}, q_mlp is None: {q_mlp is None}")
+            q_input = build_masker_input(q_flat, q_input, q_mlp, N, C, B)
             self.prev_q_cam = q_flat[:, [0], :]
-            q = q_mlp(q_input).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
+            q_mask = F.sigmoid(q_mlp(q_input))
+            q = (q_flat * q_mask).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
         else:
             self.prev_q_cam = q[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
 
         if k_masker is not None:
             k_input, k_mlp = k_masker
             k_flat = k.transpose(1, 2).reshape(B, N, C)
-            k_input = build_masker_input(k_flat, k_input, k_mlp)
+            # print(f"K Input is None: {k_input is None}, k_mlp is None: {k_mlp is None}")
+            k_input = build_masker_input(k_flat, k_input, k_mlp, N, C, B)
             self.prev_k_cam = k_flat[:, [0], :]
-            k = k_mlp(k_input).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
+            k_mask = F.sigmoid(k_mlp(k_input))
+            k = (k_flat * k_mask).reshape(B, N, self.num_heads, C // self.num_heads).transpose(1, 2)
         else:
             self.prev_k_cam = k[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
 
@@ -168,7 +212,14 @@ class Attention(nn.Module):
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        if q_masker is None and k_masker is None:
+            return x
+        elif q_masker is not None and k_masker is not None:
+            return x, torch.cat([q_mask, k_mask], dim=-1)
+        elif q_masker is not None:
+            return x, q_mask
+        else:
+            return x, k_mask
 
 
 class Block(nn.Module):
@@ -260,34 +311,23 @@ class CrossAttention(nn.Module):
             .permute(0, 2, 1, 3)
         )
 
-        def build_masker_input(flat, extra_input, mlp, N):
-            in_features = mlp.fc1.in_features
-            extra_dim = in_features - C
-            if extra_dim <= 0:
-                return flat
-            if extra_input is None:
-                extra = flat.new_zeros(B, N, extra_dim)
-            else:
-                extra_input = extra_input.reshape(B, N-1, extra_dim)
-                prev_extra = flat.new_zeros(B, 1, extra_dim)
-                extra = torch.cat([prev_extra, extra_input], dim=1)
-            return torch.cat([flat, extra], dim=-1)
-
         if q_masker is not None:
             q_input, q_mlp = q_masker
             q_flat = q.transpose(1, 2).reshape(B, Nq, C)
-            q_input = build_masker_input(q_flat, q_input, q_mlp, Nq)
+            q_input = build_masker_input(q_flat, q_input, q_mlp, Nq, C, B)
             self.prev_q_cam = q_flat[:,[0],:].detach()
-            q = q_mlp(q_input).reshape(B, Nq, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+            q_mask = F.sigmoid(q_mlp(q_input))
+            q = (q_flat * q_mask).reshape(B, Nq, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
         else:
             self.prev_q_cam = q[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
         
         if k_masker is not None:
             k_input, k_mlp = k_masker
             k_flat = k.transpose(1, 2).reshape(B, Nk, C)
-            k_input = build_masker_input(k_flat, k_input, k_mlp, Nk)
+            k_input = build_masker_input(k_flat, k_input, k_mlp, Nk, C, B)
             self.prev_k_cam = k_flat[:,[0],:].detach()
-            k = k_mlp(k_input).reshape(B, Nk, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+            k_mask = F.sigmoid(k_mlp(k_input))
+            k = (k_flat * k_mask).reshape(B, Nk, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
         else:
             self.prev_k_cam = k[:, :, 0, :].detach().reshape(B, 1, C)  # Store the camera token for potential use in the next forward pass
 
@@ -317,7 +357,15 @@ class CrossAttention(nn.Module):
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        if q_masker is None and k_masker is None:
+            return x
+        elif q_masker is not None and k_masker is not None:
+            return x, torch.cat([q_mask, k_mask], dim=-1)
+        elif q_masker is not None:
+            return x, q_mask
+        else:
+            return x, k_mask
+
 
 
 class DecoderBlock(nn.Module):
@@ -365,28 +413,35 @@ class DecoderBlock(nn.Module):
             drop=drop,
         )
         self.norm_y = norm_layer(dim) if norm_mem else nn.Identity()
+        self.masker_loss = None
 
     def forward(self, x, y, xpos, ypos, attention_mask=None, attention_mask_cross=None, q_masker=None, k_masker=None, q_masker_cross=None, k_masker_cross=None):
-        # print if any of the maskers are None
-        # if q_masker is None:
-        #     print("q_masker is None in DecoderBlock")
-        # else:
-        #     print("q_masker is not None in DecoderBlock")
-        # if k_masker is None:
-        #     print("k_masker is None in DecoderBlock")
-        # else:
-        #     print("k_masker is not None in DecoderBlock")
-        # if q_masker_cross is None:
-        #     print("q_masker_cross is None in DecoderBlock")
-        # else:
-        #     print("q_masker_cross is not None in DecoderBlock")
-        # if k_masker_cross is None:
-        #     print("k_masker_cross is None in DecoderBlock")
-        # else:
-            # print("k_masker_cross is not None in DecoderBlock")
-        x = x + self.drop_path(self.attn(self.norm1(x), xpos, mask=attention_mask, q_masker=q_masker, k_masker=k_masker))
+        self.masker_loss = None
+        attn_out = self.attn(self.norm1(x), xpos, mask=attention_mask, q_masker=q_masker, k_masker=k_masker)
+        if isinstance(attn_out, tuple):
+            attn_val, attn_mask = attn_out
+            self.masker_loss = (1.0 - attn_mask).pow(2).mean()
+        else:
+            attn_val = attn_out
+        x = x + self.drop_path(attn_val)
         y_ = self.norm_y(y)
-        x = x + self.drop_path(self.cross_attn(self.norm2(x), y_, y_, xpos, ypos, mask=attention_mask_cross, q_masker=q_masker_cross, k_masker=k_masker_cross))
+        cross_out = self.cross_attn(
+            self.norm2(x),
+            y_,
+            y_,
+            xpos,
+            ypos,
+            mask=attention_mask_cross,
+            q_masker=q_masker_cross,
+            k_masker=k_masker_cross,
+        )
+        if isinstance(cross_out, tuple):
+            cross_val, cross_mask = cross_out
+            cross_loss = (1.0 - cross_mask).pow(2).mean()
+            self.masker_loss = cross_loss if self.masker_loss is None else self.masker_loss + cross_loss
+        else:
+            cross_val = cross_out
+        x = x + self.drop_path(cross_val)
         x = x + self.drop_path(self.mlp(self.norm3(x)))
         return x, y
 
