@@ -1,18 +1,18 @@
-# #!/bin/bash
-# #PBS -N attn_masker_cam_only
-# #PBS -l select=1:ncpus=24:ngpus=2:mem=128gb:host=cvml12
+#!/bin/bash
+#PBS -N attn_masker_cam_only
+#PBS -l select=1:ncpus=24:ngpus=2:mem=256gb:host=cvml04
 
-# # Activate the Conda environment
-# source /apps/miniconda3/etc/profile.d/conda.sh
-# # source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
-# conda activate cut3r
+# Activate the Conda environment
+source /apps/miniconda3/etc/profile.d/conda.sh
+# source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
+conda activate cut3r
 
 cd /home/ramanathan/Methods/CUT3R/src
 
 # Define tag for log and save path
 
 #CUDA_LAUNCH_BLOCKING=1 NCCL_DEBUG=TRACE 
-CUDA_VISIBLE_DEVICES=0,1 TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 taskset -c 20-28 accelerate launch --multi_gpu train.py  --config-name dymask_20views_DPT_mask
+TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py  --config-name dymask_20views_DPT_mask
 
 
 # # alias pn='pbsnodes -aSj'
