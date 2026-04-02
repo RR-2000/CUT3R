@@ -117,6 +117,7 @@ def train(args):
         ],
     )
     device = accelerator.device
+    torch.autograd.set_detect_anomaly(True)
 
     setup_for_distributed(accelerator)
 

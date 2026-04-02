@@ -85,6 +85,24 @@ class Mlp(nn.Module):
         return self.drop2(self.fc2(self.drop1(self.act(self.fc1(x)))))
 
 
+class Mlp_Masker(Mlp):
+
+    def __init__(
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        act_layer=nn.GELU,
+        bias=True,
+        drop=0.0,
+    ):
+        super().__init__( in_features, hidden_features, out_features, act_layer, bias, drop)
+
+    def forward(self, x, cam_token):
+        input = torch.cat([cam_token, x], dim=-1)
+        return self.drop2(self.fc2(self.drop1(self.act(self.fc1(input)))))
+
+
 class Attention(nn.Module):
 
     def __init__(
@@ -117,7 +135,7 @@ class Attention(nn.Module):
         )
         q, k, v = [qkv[:, :, i] for i in range(3)]
 
-        def build_masker_input(flat, extra_input, cam_input, mlp):
+        def build_masker_input(flat, extra_input, mlp):
             in_features = mlp.fc1.in_features
             extra_dim = in_features - C
             if extra_dim <= 0:
@@ -126,19 +144,25 @@ class Attention(nn.Module):
                 extra_input = flat.new_zeros(B, N-1, extra_dim)
             else:
                 extra_input = extra_input.reshape(B, N-1, extra_dim)
-            extra = torch.cat([prev_extra, extra_input], dim=1)
-            return torch.cat([cam_input, flat, extra], dim=-1)
+            # extra = torch.cat([prev_extra, extra_input], dim=1)
+            # copy cam_input N-1 times and concatenate with extra_input
+
+            return torch.cat([flat, extra_input], dim=-1)
 
 
         if q_masker is not None and mask is None:
             q_input, q_mlp = q_masker
-            q_flat = q.transpose(1, 2).reshape(B, N, C)
-            q_input = build_masker_input(q_flat[:, 1:], q_input, q_flat[:, [0], :], q_mlp)
-            self.prev_q_cam = q_flat[:, [0], :]
+            k_flat = k.transpose(1, 2).reshape(B, N, C)
+            q_input = build_masker_input(k_flat[:, 1:], q_input, q_mlp)
             q_mask = q_mlp(q_input)
-            # Make Attention mask from q_mask only masking the B, 0, C token's Q
-            mask = torch.zeros(B, N, N, device=x.device)
-            mask[:, 0, 1:] = q_mask.squeeze(1)
+
+            if q_mask.dim() == 3 and q_mask.shape[-1] == 1:
+                q_mask = q_mask.squeeze(-1)
+            q_mask = q_mask.reshape(B, N - 1)
+
+            # Build attention mask (B, N, N); apply q_mask only to query index 0.
+            mask = q_mask.new_zeros(B, N, N)
+            mask[:, 0, 1:] = q_mask
 
         q_type = q.dtype
         k_type = k.dtype
@@ -151,13 +175,38 @@ class Attention(nn.Module):
             q = q.to(q_type)
             k = k.to(k_type)
 
-        x = (
-            scaled_dot_product_attention(
-                query=q, key=k, value=v, dropout_p=self.attn_drop.p, scale=self.scale, attn_mask=mask
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        if mask is not None:
+            mask = mask.contiguous()
+
+        use_fast_path = mask is None or (mask.dtype == torch.bool and not mask.requires_grad)
+        if use_fast_path:
+            x = scaled_dot_product_attention(
+                query=q,
+                key=k,
+                value=v,
+                dropout_p=self.attn_drop.p,
+                scale=self.scale,
+                attn_mask=mask,
             )
-            .transpose(1, 2)
-            .reshape(B, N, C)
-        )
+        else:
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=False,
+                enable_math=True,
+            ):
+                x = scaled_dot_product_attention(
+                    query=q,
+                    key=k,
+                    value=v,
+                    dropout_p=self.attn_drop.p,
+                    scale=self.scale,
+                    attn_mask=mask,
+                )
+
+        x = x.transpose(1, 2).reshape(B, N, C)
 
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -281,13 +330,38 @@ class CrossAttention(nn.Module):
                     k = self.rope(k, kpos)
                 k = k.to(k_type)
 
-        x = (
-            scaled_dot_product_attention(
-                query=q, key=k, value=v, dropout_p=self.attn_drop.p, scale=self.scale, attn_mask=mask
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
+        if mask is not None:
+            mask = mask.contiguous()
+
+        use_fast_path = mask is None or (mask.dtype == torch.bool and not mask.requires_grad)
+        if use_fast_path:
+            x = scaled_dot_product_attention(
+                query=q,
+                key=k,
+                value=v,
+                dropout_p=self.attn_drop.p,
+                scale=self.scale,
+                attn_mask=mask,
             )
-            .transpose(1, 2)
-            .reshape(B, Nq, C)
-        )
+        else:
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=False,
+                enable_math=True,
+            ):
+                x = scaled_dot_product_attention(
+                    query=q,
+                    key=k,
+                    value=v,
+                    dropout_p=self.attn_drop.p,
+                    scale=self.scale,
+                    attn_mask=mask,
+                )
+
+        x = x.transpose(1, 2).reshape(B, Nq, C)
 
         x = self.proj(x)
         x = self.proj_drop(x)

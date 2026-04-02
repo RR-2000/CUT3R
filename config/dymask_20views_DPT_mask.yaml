@@ -73,7 +73,7 @@ seed: 0
 batch_size: 1
 accum_iter: 4
 gradient_checkpointing: True
-epochs: 50
+epochs: 30
 start_epoch: 0
 weight_decay: 0.05
 lr: 1e-6
@@ -97,7 +97,7 @@ keep_freq: 1
 print_freq: 10
 print_img_freq: 50000000
 num_imgs_vis: 4
-save_dir: 'checkpoints/mask_attn'
+save_dir: 'checkpoints/mask_attn_shared_mlp_cam_only'
 exp_name: 'dpt_512_vary_4_64_PO'
 task: 'cut3r'
 logdir: /mnt/rdata4_3/dymask_datasets/CUT3R/${save_dir}/${exp_name}/logs

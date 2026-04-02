@@ -32,6 +32,7 @@ from dust3r.blocks import (
     Block,
     DecoderBlock,
     Mlp,
+    Mlp_Masker,
     Attention,
     CrossAttention,
     DropPath,
@@ -360,7 +361,7 @@ class ARCroco3DStereo(CroCoNet):
         mlp_ratio=4.0,
     ):  
         p_size = self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]
-        in_features = int(2*dec_embed_dim + self.RAFT*(p_size*2) + self.YOLO*(p_size*1))
+        in_features = int(dec_embed_dim + self.RAFT*(p_size*2) + self.YOLO*(p_size*1))
         hidden_features = int(in_features * mlp_ratio)
         out_features = 1
 
@@ -772,7 +773,6 @@ class ARCroco3DStereo(CroCoNet):
         elif yolo_output is None and raft_flow is not None:
             f_extra = raft_flow
         
-        print(f'f_extra is None: {f_extra == None}')
         final_output = [(f_state, f_img)]  # before projection
         assert f_state.shape[-1] == self.dec_embed_dim
         f_img = self.decoder_embed(f_img)
@@ -810,8 +810,8 @@ class ARCroco3DStereo(CroCoNet):
                     pos_state,
                     None, # attention_mask
                     None, # cross_attention_mask
-                    None, # q_masker
-                    self.attention_masker_cam if f_extra is not None else None, # k_masker
+                    (f_extra, self.attention_masker_cam) if f_extra is not None else None, # q_masker
+                    None, # k_masker
                     None, # q_masker_cross
                     None, # k_masker_cross
                     use_reentrant=not self.fixed_input_length,
@@ -820,7 +820,7 @@ class ARCroco3DStereo(CroCoNet):
                 f_state, _ = blk_state(*final_output[-1][::+1], pos_state, pos_img)
 
                 f_img, _ = blk_img(*final_output[-1][::-1], pos_img, pos_state,
-                                                                k_masker= self.attention_masker_cam if f_extra is not None else None,
+                                                                q_masker= (f_extra, self.attention_masker_cam) if f_extra is not None else None,
                                                                 )
             final_output.append((f_state, f_img))
         del final_output[1]  # duplicate with final_output[0]
