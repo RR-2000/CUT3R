@@ -248,7 +248,7 @@ class DPTPts3dPose(nn.Module):
 
             if self.has_pose:
                 pose = postprocess_pose(pose, self.pose_mode)
-                final_output["camera_pose"] = pose  # B,7
+                final_output["camera_pose_old"] = pose  # B,7
                 cross_out = checkpoint(
                     self.dpt_cross,
                     x_cross,
@@ -402,7 +402,7 @@ class DPTPts3dPoseDyMask(nn.Module):
 
             if self.has_pose:
                 pose = postprocess_pose(pose, self.pose_mode)
-                final_output["camera_pose"] = pose  # B,7
+                final_output["camera_pose_old"] = pose  # B,7
                 cross_out = checkpoint(
                     self.dpt_cross,
                     x_cross,

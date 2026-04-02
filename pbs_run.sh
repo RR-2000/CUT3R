@@ -1,6 +1,6 @@
 #!/bin/bash
-#PBS -N attn_mask_CUT3R_deep
-#PBS -l select=1:ncpus=32:ngpus=3:mem=256gb:host=cvml04
+#PBS -N complex_cam_head
+#PBS -l select=1:ncpus=16:ngpus=1:mem=64gb:host=cvml04
 
 # Activate the Conda environment
 # source /apps/miniconda3/etc/profile.d/conda.sh
@@ -12,7 +12,7 @@ cd /home/ramanathan/Methods/CUT3R/src
 # Define tag for log and save path
 
 #CUDA_LAUNCH_BLOCKING=1 NCCL_DEBUG=TRACE 
-TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py  --config-name dymask_20views_DPT_mask_individual
+TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py  --config-name complex_cam_head
 
 
 # # alias pn='pbsnodes -aSj'

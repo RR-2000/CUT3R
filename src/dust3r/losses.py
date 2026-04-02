@@ -69,7 +69,28 @@ class L21Loss(LLoss):
         return torch.norm(a - b, dim=-1)  # normalized L2 distance
 
 
+class L1Loss(BaseCriterion):
+    """L-norm loss"""
+
+    def forward(self, a, b):
+        assert (
+            a.shape == b.shape and a.ndim >= 2
+        ), f"Bad shape = {a.shape}"
+        dist = self.distance(a, b)
+        if self.reduction == "none":
+            return dist
+        if self.reduction == "sum":
+            return dist.sum()
+        if self.reduction == "mean":
+            return dist.mean() if dist.numel() > 0 else dist.new_zeros(())
+        raise ValueError(f"bad {self.reduction=} mode")
+
+    def distance(self, a, b):
+        return torch.norm(a - b, dim=-1, p=1)  # L1 distance
+
+
 L21 = L21Loss()
+L1 = L1Loss()
 
 
 class MSELoss(LLoss):
@@ -1233,3 +1254,26 @@ class MMaskLossSparse(Criterion, MultiLoss):
             details[f"pred_dymask_{i+1}"] = pred_dymasks[i]
         dymask_loss = sum(ls) / len(ls)
         return dymask_loss, details
+
+
+class CamWarmUpLoss(Criterion, MultiLoss):
+    def __init__(self, criterion):
+        super().__init__(criterion)
+
+    def distance(self, a, b):
+        return self.criterion(a, b)
+
+    def compute_loss(self, gts, preds, **kw):
+        pose_old = [pred["camera_pose_old"] for pred in preds]
+        pose_new = [pred["camera_pose"] for pred in preds]
+        ls = [
+            self.distance(pose_new, pose_old)
+            for pose_new, pose_old in zip(pose_new, pose_old)
+        ]
+        details = {}
+        self_name = type(self).__name__
+        for i, l in enumerate(ls):
+            details[self_name + f"_camera_pose_L1/{i+1}"] = float(l)
+            details[f"pred_camera_pose_{i+1}"] = pose_new[i]
+        camera_pose_loss = sum(ls) / len(ls)
+        return camera_pose_loss, details
