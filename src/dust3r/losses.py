@@ -36,6 +36,11 @@ def Sum(*losses_and_masks):
         return loss
 
 
+
+def _finite(x):
+    return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 class BaseCriterion(nn.Module):
     def __init__(self, reduction="mean"):
         super().__init__()
@@ -86,7 +91,7 @@ class L1Loss(BaseCriterion):
         raise ValueError(f"bad {self.reduction=} mode")
 
     def distance(self, a, b):
-        return torch.norm(a - b, dim=-1, p=1)  # L1 distance
+        return _finite(torch.norm(a - b, dim=-1, p=1))  # L1 distance
 
 
 L21 = L21Loss()
