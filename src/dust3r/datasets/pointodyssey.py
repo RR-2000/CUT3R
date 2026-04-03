@@ -20,7 +20,7 @@ class PointOdyssey_Multi(BaseMultiViewDataset):
         super().__init__(*args, **kwargs)
         assert self.split in ["train", "test", "val"]
         self.scenes_to_use = [
-            # 'cab_h_bench_3rd', 'cab_h_bench_ego1', 'cab_h_bench_ego2',
+            'cab_h_bench_3rd', 'cab_h_bench_ego1', 'cab_h_bench_ego2',
             "cnb_dlab_0215_3rd",
             "cnb_dlab_0215_ego1",
             "cnb_dlab_0225_3rd",
@@ -70,8 +70,8 @@ class PointOdyssey_Multi(BaseMultiViewDataset):
 
         j = 0
         for scene in tqdm(os.listdir(root)):
-            if scene not in self.scenes_to_use:
-                continue
+            # if scene not in self.scenes_to_use:
+            #     continue
             scene_dir = osp.join(root, scene)
             rgb_dir = osp.join(scene_dir, "rgb")
             basenames = sorted(

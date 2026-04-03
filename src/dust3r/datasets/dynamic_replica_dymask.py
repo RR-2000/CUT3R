@@ -207,7 +207,7 @@ class DynamicReplica_DyMask(BaseMultiViewDataset):
                 dict(
                     img=rgb_image,
                     depthmap=depthmap.astype(np.float32),
-                    dynamic_mask=dynamic_mask.astype(np.float32),
+                    # dynamic_mask=dynamic_mask.astype(np.float32),
                     camera_pose=camera_pose.astype(np.float32),
                     camera_intrinsics=intrinsics.astype(np.float32),
                     dataset="dynamic_replica_dymask",

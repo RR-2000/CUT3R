@@ -52,13 +52,17 @@ def postprocess_pose(out, mode, inverse=False):
             scale = d.square() / d.clip(min=1e-8)
 
     if mode == "exp":
+        # Clamp before expm1 to avoid inf for very large translation norms.
+        d_stable = d.clamp(max=20.0)
         if inverse:
-            scale = d / torch.expm1(d).clip(min=1e-8)
+            scale = d_stable / torch.expm1(d_stable).clip(min=1e-8)
         else:
-            scale = torch.expm1(d) / d.clip(min=1e-8)
+            scale = torch.expm1(d_stable) / d_stable.clip(min=1e-8)
 
     trans = trans * scale
     quats = standardize_quaternion(quats)
+    trans = torch.nan_to_num(trans, nan=0.0, posinf=1e4, neginf=-1e4)
+    quats = torch.nan_to_num(quats, nan=0.0, posinf=1.0, neginf=-1.0)
 
     return torch.cat([trans, quats], dim=-1)
 

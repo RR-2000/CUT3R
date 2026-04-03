@@ -604,6 +604,7 @@ class ARCroco3DStereo(CroCoNet):
 
     def set_camera_head(self, YOLO_flag, RAFT_flag, pose_mode):
         input_dim = self.dec_embed_dim + RAFT_flag*(self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]*2) + YOLO_flag*(self.patch_embed.patch_size[0]*self.patch_embed.patch_size[1]*1)
+        
         self.camera_head = CameraHead(dim=input_dim, pose_mode=pose_mode)
 
     def _encode_image(self, image, true_shape):
@@ -970,7 +971,7 @@ class ARCroco3DStereo(CroCoNet):
                 raft_flow = raft_flow[-1]  # Shape: (B, 2, H, W)
                 raft_flow = F.interpolate(raft_flow, size=views[i-1]["img"].shape[2:4], mode='bilinear', align_corners=False)
                 raft_flow = patchify(raft_flow, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*2)
-            else:
+            elif self.RAFT:
                 raft_flow = torch.zeros(
                     feat_i.shape[0],
                     (views[i]["img"].shape[2] // self.patch_embed.patch_size[0]) * (views[i]["img"].shape[3] // self.patch_embed.patch_size[1]),
@@ -985,7 +986,7 @@ class ARCroco3DStereo(CroCoNet):
                 yolo_output = torch.cat([out.mask.unsqueeze(0) for out in yolo_output], dim=0)  # Shape: (B, 1, H, W)
                 yolo_output = F.interpolate(yolo_output, size=views[i]["img"].shape[2:4], mode='bilinear', align_corners=False)
                 yolo_output = patchify(yolo_output, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size*1)
-            else:
+            elif self.YOLO:
                 yolo_output = torch.zeros(
                     feat_i.shape[0],
                     (views[i]["img"].shape[2] // self.patch_embed.patch_size[0]) * (views[i]["img"].shape[3] // self.patch_embed.patch_size[1]),
