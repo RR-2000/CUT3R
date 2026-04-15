@@ -7,7 +7,7 @@
 source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 conda activate cut3r
 
-cd /home/ramanathan/Methods/CUT3R/src
+cd /home/ramanathan/TTT/CUT3R/src
 
 # Define tag for log and save path
 
