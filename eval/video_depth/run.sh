@@ -7,21 +7,23 @@ source /apps/miniconda3/etc/profile.d/conda.sh
 # # source /mnt/data/apps/miniconda3/etc/profile.d/conda.sh
 conda activate cut3r
 
-cd /home/ramanathan/Methods/CUT3R
+cd /home/ramanathan/TTT/CUT3R
 
 nvidia-smi
 
 set -e
-export PYTHONPATH=/home/ramanathan/Methods/CUT3R:/home/ramanathan/Methods/CUT3R/src:$PYTHONPATH
+export PYTHONPATH=/home/ramanathan/TTT/CUT3R:/home/ramanathan/TTT/CUT3R/src:$PYTHONPATH
 
 workdir='/mnt/rdata4_3/dymask_datasets/CUT3R/checkpoints'
+# workdir='.'
 evaldir='/mnt/rdata4_3/dymask_datasets/CUT3R/eval_prototype'
-model_name='mask_attn_individual_shallow_Regularized'
+model_name='baseline'
 # model_name='base'
-ckpt_name='checkpoint-last'
+ckpt_name='cut3r_512_dpt_4_64'
+model_weights="${workdir}/src/${ckpt_name}.pth"
 # model_weights="${workdir}/${model_name}/dpt_512_vary_4_64_PO/${ckpt_name}.pth"
-model_weights="/home/ramanathan/Methods/CUT3R/src/cut3r_512_dpt_4_64.pth"
-datasets=('sintel' ) # 'sintel' 'bonn' 'kitti'
+model_weights="/home/ramanathan/TTT/CUT3R/src/cut3r_512_dpt_4_64.pth"
+datasets=('sintel' 'bonn' ) # 'sintel' 'bonn' 'kitti'
 
 for data in "${datasets[@]}"; do
     output_dir="${evaldir}/testing_mlp_mask/video_depth/${data}_${model_name}"
@@ -30,7 +32,8 @@ for data in "${datasets[@]}"; do
         --weights "$model_weights" \
         --output_dir "$output_dir" \
         --eval_dataset "$data" \
-        --size 512
+        --size 512 \
+        --TTT3R 
     python eval/video_depth/eval_depth.py \
     --output_dir "$output_dir" \
     --eval_dataset "$data" \

@@ -64,6 +64,8 @@ def get_args_parser():
         help="list of sequences for pose evaluation",
     )
 
+    parser.add_argument("--TTT3R", action="store_true", default=False, help="use TTT3R inference")
+
     parser.add_argument("--revisit", type=int, default=1)
     parser.add_argument("--freeze_state", action="store_true", default=False)
     parser.add_argument("--solve_pose", action="store_true", default=False)
@@ -82,7 +84,10 @@ def eval_pose_estimation(args, model, save_dir=None):
 
 
 def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=None):
-    from dust3r.inference import inference
+    if args.TTT3R:
+        from dust3r.inference_TTT3R import inference
+    else:
+        from dust3r.inference import inference
 
     metadata = dataset_metadata.get(args.eval_dataset)
     anno_path = metadata.get("anno_path", None)
@@ -266,7 +271,10 @@ if __name__ == "__main__":
     add_path_to_dust3r(args.weights)
     from dust3r.utils.image import load_images_for_eval as load_images
     from dust3r.post_process import estimate_focal_knowing_depth
-    from dust3r.model import ARCroco3DStereo
+    if args.TTT3R:
+        from dust3r.model_TTT3R import ARCroco3DStereo
+    else:
+        from dust3r.model import ARCroco3DStereo
     from dust3r.utils.camera import pose_encoding_to_camera
     from dust3r.utils.geometry import weighted_procrustes, geotrf
 
@@ -309,50 +317,7 @@ if __name__ == "__main__":
         mask_filelist=None,
     ):
         images = load_images(img_paths, size=size, crop=crop)
-        masks = None
-        if mask_filelist is not None:
-            masks = load_images(mask_filelist, size=size, crop=crop)
 
-        # Mask prep
-        if masks is not None:
-            # make patches to conform with the ViT encoder input
-            patch_size = 16  # Assuming a patch size of 16, adjust if needed
-            masks = [
-                mask["img"].float() for mask in masks
-            ]  # Convert to tensors and add channel dimension
-            print(f"Loaded {len(masks)} masks with shape {masks[0].shape} and dtype {masks[0].dtype}")
-            masks = [
-                torch.nn.functional.unfold(mask, kernel_size=patch_size, stride=patch_size)
-                for mask in masks
-            ]  # Unfold into patches
-            print(f"Unfolded masks into patches with shape {masks[0].shape}")
-            masks = [
-                mask.transpose(1, 2) for mask in masks
-            ]  # Transpose to (num_patches, channels * patch_size * patch_size)
-            print(f"Transposed masks to shape {masks[0].shape}")
-            masks = [
-                (1-(1.0*(mask>0)).mean(dim=-1)) for mask in masks
-            ]  # Convert to binary mask based on majority (1, num_patches)
-            print(f"Converted masks to binary with shape {masks[0].shape} and dtype {masks[0].dtype}")
-
-            
-            for i in range(len(masks)):
-                mask = masks[i]
-                mask_copy = torch.ones((mask.shape[1]+1, mask.shape[1]+1), dtype=torch.bool)
-                mask_copy[1:, 1:] = mask
-                masks[i] = mask_copy  # Shape (num_patches, num_patches)
-            
-            print(f"Final masks shape: {masks[0].shape} and dtype {masks[0].dtype}")
-            # masks = [
-            #     mask.transpose(1, 2) for mask in masks
-            # ]  # Transpose to (K, Q)
-
-            
-            # # Duplicate to N*N attention mask by padding ones
-            # masks = [
-            #     mask.unsqueeze(1).repeat(1, mask.shape[0], 1) for mask in masks
-            # ]  # Shape (num_patches, num_patches)
-        
         views = []
 
         
@@ -381,7 +346,6 @@ if __name__ == "__main__":
                     "ray_mask": torch.tensor(False).unsqueeze(0),
                     "update": torch.tensor(True).unsqueeze(0),
                     "reset": torch.tensor(False).unsqueeze(0),
-                    "attention_mask": masks[i].unsqueeze(0) if masks is not None else None,
                 }
                 views.append(view)
         else:

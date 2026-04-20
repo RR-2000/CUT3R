@@ -37,6 +37,8 @@ from dust3r.blocks_TTT3R import (
     DropPath,
 )  # noqa
 
+from torchvision.models.optical_flow import raft_small, Raft_Small_Weights
+
 inf = float("inf")
 from accelerate.logging import get_logger
 
@@ -93,6 +95,13 @@ def load_model(model_path, device, verbose=True):
         print(s)
     return net.to(device)
 
+def patchify(x, patch_size):
+    patch_x, patch_y = patch_size
+    B, C, H, W = x.shape
+    assert H % patch_x == 0 and W % patch_y == 0, "Image dimensions must be divisible by patch size"
+    x = x.view(B, C, H // patch_x, patch_x, W // patch_y, patch_y)
+    x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+    return x.view(B, -1, patch_x * patch_y * C) # Shape: (B, num_patches, patch_size*patch_size*C)
 
 class ARCroco3DStereoConfig(PretrainedConfig):
     model_type = "arcroco_3d_stereo"
@@ -116,8 +125,9 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         rgb_head=False,
         pose_conf_head=False,
         pose_head=False,
-        model_update_type="ttt3r",
+        model_update_type="RAFT",
         dymask_head=False,
+        RAFT=False,
         **croco_kwargs,
     ):
         super().__init__()
@@ -141,6 +151,7 @@ class ARCroco3DStereoConfig(PretrainedConfig):
         self.model_update_type = model_update_type
         self.croco_kwargs = croco_kwargs
         self.dymask_head = dymask_head
+        self.RAFT = RAFT
 
 
 class LocalMemory(nn.Module):
@@ -263,6 +274,7 @@ class ARCroco3DStereo(CroCoNet):
                 for _ in range(config.ray_enc_depth)
             ]
         )
+        self.RAFT = True
         self.enc_norm_ray_map = nn.LayerNorm(self.enc_embed_dim, eps=1e-6)
         self.dec_num_heads = self.croco_args["dec_num_heads"]
         self.pose_head_flag = config.pose_head
@@ -299,6 +311,10 @@ class ARCroco3DStereo(CroCoNet):
             self.croco_args.get("norm_layer", None),
             self.croco_args.get("norm_im2_in_dec", None),
         )
+
+        if self.RAFT:
+            self.raft = raft_small(pretrained=True, progress=False).eval()
+
         self.set_downstream_head(
             config.output_mode,
             config.head_type,
@@ -872,6 +888,17 @@ class ARCroco3DStereo(CroCoNet):
         for i in range(len(views)):
             feat_i = feat[i]
             pos_i = pos[i]
+            raft_maps = []
+            if self.RAFT and i > 0:
+                prev_img = views[i-1]["img"]
+                curr_img = views[i]["img"]
+                raft_flow = self.raft(prev_img, curr_img)  # Shape: N*(B, 2, H, W)
+                raft_flow = raft_flow[-1].permute(0, 2, 3, 1)  # Shape: (B, H, W, 2)
+                raft_mag = torch.norm(raft_flow, dim=-1, keepdim=True).permute(0, 3, 1, 2)  # Shape: (B, 1, H, W)
+                raft_mag = F.interpolate(raft_mag, size=views[i]["img"].shape[-2:], mode='bilinear', align_corners=False)
+                raft_mag = patchify(raft_mag, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size)
+                # raft_maps.append(raft_mag)
+            
             if self.pose_head_flag:
                 global_img_feat_i = self._get_img_level_feat(feat_i) # avg pool: [1, 576, 1024] -> [1, 1, 1024]
                 if i == 0:
@@ -913,6 +940,7 @@ class ARCroco3DStereo(CroCoNet):
             ress.append(res)
             img_mask = views[i]["img_mask"]
             update = views[i].get("update", None)
+            
             if update is not None:
                 update_mask = (
                     img_mask & update
@@ -931,6 +959,28 @@ class ARCroco3DStereo(CroCoNet):
                     cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
                     state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
                     update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
+                # elif self.config.model_update_type == "RAFT":
+                #     if i == 0:
+                #         update_mask1 = update_mask
+                #     else:
+                #         raft_mag_i = torch.mean(raft_mag, dim=-1)  # [B, num_patches]
+                #         update_mask1 = update_mask *(1.0 - torch.sigmoid(raft_mag_i)[..., None] * 1.0) # [batch, 768, 1]
+                elif self.config.model_update_type == "RAFT":
+                    if i == 0:
+                        cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
+                        state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
+                        update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
+                    else:
+                        cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
+                        raft_mag_i = torch.mean(raft_mag, dim=-1)  # [B, num_patches]
+                        print("cross_attn_state shape:", cross_attn_state.shape)
+                        print("raft_mag_i shape:", raft_mag_i.shape)
+                        RAFT_mask = (1.0 - torch.sigmoid(raft_mag_i)[..., None] * 1.0).unsqueeze(1) # [batch, 1, num_patches, 1]
+                        cross_attn_state[:, :, 1:, :] = cross_attn_state[:, :, 1:, :] * RAFT_mask # only keep the attention to image tokens
+                        print("cross_attn_state after applying RAFT mask:", cross_attn_state.shape)
+                        print("RAFT_mask shape:", RAFT_mask.shape)
+                        state_query_img_key = (cross_attn_state).mean(dim=(-1, -2))
+                        update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
                 else:
                     raise ValueError(f"Invalid model type: {self.config.model_update_type}")
 
@@ -1172,6 +1222,16 @@ class ARCroco3DStereo(CroCoNet):
         all_state_args = []
         reset_mask = False
         for i, _view in enumerate(views):
+
+            if self.RAFT and i > 0:
+                prev_img = views[i-1]["img"]
+                curr_img = views[i]["img"]
+                raft_flow = self.raft(prev_img, curr_img)  # Shape: N*(B, 2, H, W)
+                raft_flow = raft_flow[-1].permute(0, 2, 3, 1)  # Shape: (B, H, W, 2)
+                raft_mag = torch.norm(raft_flow, dim=-1, keepdim=True).permute(0, 3, 1, 2)  # Shape: (B, 1, H, W)
+                raft_mag = F.interpolate(raft_mag, size=views[i]["img"].shape[-2:], mode='bilinear', align_corners=False)
+                raft_mag = patchify(raft_mag, self.patch_embed.patch_size)  # Shape: (B, num_patches, patch_size*patch_size)
+
             view = to_gpu(_view, device)
             device = view["img"].device
             batch_size = view["img"].shape[0]
@@ -1301,6 +1361,25 @@ class ARCroco3DStereo(CroCoNet):
                     cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
                     state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
                     update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
+                # elif self.config.model_update_type == "RAFT":
+                #     if i == 0:
+                #         update_mask1 = update_mask
+                #     else:
+                #         raft_mag_i = torch.mean(raft_mag, dim=-1)  # [B, num_patches]
+                #         update_mask1 = update_mask *(1.0 - torch.sigmoid(raft_mag_i)[..., None] * 1.0) # [batch, 768, 1]
+                elif self.config.model_update_type == "RAFT":
+                    if i == 0:
+                        cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
+                        state_query_img_key = cross_attn_state.mean(dim=(-1, -2))
+                        update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
+                    else:
+                        cross_attn_state = rearrange(torch.cat(cross_attn_state, dim=0), 'l h nstate nimg -> 1 nstate nimg (l h)') # [12, 16, 768, 1 + 576] -> [1, 768, 1 + 576, 12*16]
+                        raft_mag_i = torch.mean(raft_mag, dim=-1)  # [B, num_patches]
+                        RAFT_mask = (1.0 - torch.sigmoid(raft_mag_i)[..., None] * 1.0).unsqueeze(1) # [batch, 1, num_patches, 1]
+                        cross_attn_state[:, :, 1:, :] = cross_attn_state[:, :, 1:, :] * RAFT_mask # only keep the attention to image tokens
+                        state_query_img_key = (cross_attn_state).mean(dim=(-1, -2))
+                        update_mask1 = update_mask * torch.sigmoid(state_query_img_key)[..., None] * 1.0
+                        
                 else:
                     raise ValueError(f"Invalid model type: {self.config.model_update_type}")
 

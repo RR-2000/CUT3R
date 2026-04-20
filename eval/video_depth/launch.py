@@ -61,6 +61,12 @@ def get_args_parser():
         default=None,
         help="list of sequences for pose evaluation",
     )
+    parser.add_argument(
+        "--TTT3R",
+        action="store_true",
+        default=False,
+        help="use TTT3R inference",
+    )
     return parser
 
 
@@ -76,7 +82,11 @@ def eval_pose_estimation(args, model, save_dir=None):
 
 
 def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=None):
-    from dust3r.inference import inference
+
+    if args.TTT3R:
+        from dust3r.inference_TTT3R import inference
+    else:
+        from dust3r.inference import inference
 
     metadata = dataset_metadata.get(args.eval_dataset)
     anno_path = metadata.get("anno_path", None)
@@ -180,7 +190,10 @@ if __name__ == "__main__":
     add_path_to_dust3r(args.weights)
     from dust3r.utils.image import load_images_for_eval as load_images
     from dust3r.post_process import estimate_focal_knowing_depth
-    from dust3r.model import ARCroco3DStereo
+    if args.TTT3R:
+        from dust3r.model_TTT3R import ARCroco3DStereo
+    else:
+        from dust3r.model import ARCroco3DStereo
     from dust3r.utils.camera import pose_encoding_to_camera
 
     if args.eval_dataset == "sintel":
